@@ -56,6 +56,11 @@ class OllamaConfigTest {
     }
 
     @Test
+    fun `useBurpHttpApi defaults to false`() {
+        assertFalse(config.useBurpHttpApi)
+    }
+
+    @Test
     fun `systemPromptExplain returns default when not set`() {
         assertEquals(SecurityPrompts.DEFAULT_EXPLAIN_SELECTION, config.systemPromptExplain)
     }
@@ -63,6 +68,16 @@ class OllamaConfigTest {
     @Test
     fun `systemPromptExplainHeaders returns default when not set`() {
         assertEquals(SecurityPrompts.DEFAULT_EXPLAIN_HEADERS, config.systemPromptExplainHeaders)
+    }
+
+    @Test
+    fun `systemPromptValidateFalsePositive returns default when not set`() {
+        assertEquals(SecurityPrompts.DEFAULT_VALIDATE_FALSE_POSITIVE, config.systemPromptValidateFalsePositive)
+    }
+
+    @Test
+    fun `systemPromptGenerateLogin returns default when not set`() {
+        assertEquals(SecurityPrompts.DEFAULT_GENERATE_LOGIN_SEQUENCE, config.systemPromptGenerateLogin)
     }
 
     @Test

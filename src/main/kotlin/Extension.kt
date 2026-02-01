@@ -1,5 +1,6 @@
 import burp.api.montoya.BurpExtension
 import burp.api.montoya.MontoyaApi
+import session.OllamaLoginSessionAction
 import ui.OllamaContextMenuProvider
 import ui.OllamaHttpRequestEditorProvider
 import ui.OllamaHttpResponseEditorProvider
@@ -19,7 +20,7 @@ class Extension : BurpExtension {
         montoyaApi = api
         api.extension().setName("Burp Ollama")
 
-        ollamaService = OllamaService()
+        ollamaService = OllamaService(montoyaApi = api)
         config = OllamaConfig(api.persistence().preferences())
         config.applyTo(ollamaService)
 
@@ -59,6 +60,7 @@ class Extension : BurpExtension {
         }
 
         api.userInterface().registerSettingsPanel(settingsPanel)
+        api.http().registerSessionHandlingAction(OllamaLoginSessionAction(api, config))
         api.userInterface().registerContextMenuItemsProvider(contextMenuProvider)
         api.userInterface().registerHttpRequestEditorProvider(
             OllamaHttpRequestEditorProvider(config, ollamaService, showErrorDialog)
@@ -67,6 +69,8 @@ class Extension : BurpExtension {
             OllamaHttpResponseEditorProvider(config, ollamaService, showErrorDialog)
         )
         api.userInterface().applyThemeToComponent(settingsPanel)
+
+        api.extension().registerUnloadingHandler { ollamaService.shutdown() }
 
         api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text.")
     }

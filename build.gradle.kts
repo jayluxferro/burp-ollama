@@ -3,6 +3,8 @@ plugins {
     kotlin("jvm") version "1.9.24"
 }
 
+version = "1.0.0"
+
 repositories {
     mavenCentral()
 }
@@ -37,6 +39,8 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 tasks.named<Jar>("jar") {
+    archiveBaseName.set("burp-ollama")
+    archiveVersion.set(project.version.toString())
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(configurations.runtimeClasspath.get().filter { it.isDirectory })
     from(configurations.runtimeClasspath.get().filterNot { it.isDirectory }.map { zipTree(it) })

@@ -25,6 +25,7 @@ class OllamaServiceTest {
 
     @AfterEach
     fun tearDown() {
+        service.shutdown()
         mockServer.shutdown()
     }
 

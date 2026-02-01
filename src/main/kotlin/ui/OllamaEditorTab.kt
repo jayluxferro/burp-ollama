@@ -179,7 +179,7 @@ class OllamaEditorPanel(
     }
 
     private fun refreshModelCombo() {
-        Thread {
+        ollamaService.execute {
             config.applyTo(ollamaService)
             val models = ollamaService.listModels()
             if (models.isSuccess) {
@@ -195,7 +195,7 @@ class OllamaEditorPanel(
                     modelCombo.selectedItem = current
                 }
             }
-        }.start()
+        }
     }
 }
 
@@ -203,7 +203,7 @@ class OllamaEditorPanel(
  * Ollama tab for HTTP response editor (Repeater response pane).
  */
 class OllamaHttpResponseEditor(
-    _creationContext: EditorCreationContext,
+    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit
@@ -239,7 +239,7 @@ class OllamaHttpResponseEditor(
  * Ollama tab for HTTP request editor (Repeater request pane).
  */
 class OllamaHttpRequestEditor(
-    _creationContext: EditorCreationContext,
+    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit

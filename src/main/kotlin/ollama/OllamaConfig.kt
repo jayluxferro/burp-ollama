@@ -41,6 +41,12 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setBoolean(key("streaming"), value)
         }
 
+    var useBurpHttpApi: Boolean
+        get() = preferences.getBoolean(key("useBurpHttpApi")) ?: false
+        set(value) {
+            preferences.setBoolean(key("useBurpHttpApi"), value)
+        }
+
     var systemPromptExplain: String
         get() = preferences.getString(key("systemPromptExplain")) ?: SecurityPrompts.DEFAULT_EXPLAIN_SELECTION
         set(value) {
@@ -59,14 +65,56 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setString(key("systemPromptAnalyze"), value)
         }
 
+    var systemPromptValidateFalsePositive: String
+        get() = preferences.getString(key("systemPromptValidateFalsePositive")) ?: SecurityPrompts.DEFAULT_VALIDATE_FALSE_POSITIVE
+        set(value) {
+            preferences.setString(key("systemPromptValidateFalsePositive"), value)
+        }
+
     var systemPromptDecipher: String
         get() = preferences.getString(key("systemPromptDecipher")) ?: SecurityPrompts.DEFAULT_DECIPHER_CODE
         set(value) {
             preferences.setString(key("systemPromptDecipher"), value)
         }
 
+    var systemPromptGenerateLogin: String
+        get() = preferences.getString(key("systemPromptGenerateLogin")) ?: SecurityPrompts.DEFAULT_GENERATE_LOGIN_SEQUENCE
+        set(value) {
+            preferences.setString(key("systemPromptGenerateLogin"), value)
+        }
+
+    var loginEnabled: Boolean
+        get() = preferences.getBoolean(key("loginEnabled")) ?: false
+        set(value) {
+            preferences.setBoolean(key("loginEnabled"), value)
+        }
+
+    var loginBaseUrl: String
+        get() = preferences.getString(key("loginBaseUrl")) ?: ""
+        set(value) {
+            preferences.setString(key("loginBaseUrl"), value)
+        }
+
+    var loginRequestTemplate: String
+        get() = preferences.getString(key("loginRequestTemplate")) ?: ""
+        set(value) {
+            preferences.setString(key("loginRequestTemplate"), value)
+        }
+
+    var loginUsername: String
+        get() = preferences.getString(key("loginUsername")) ?: ""
+        set(value) {
+            preferences.setString(key("loginUsername"), value)
+        }
+
+    var loginPassword: String
+        get() = preferences.getString(key("loginPassword")) ?: ""
+        set(value) {
+            preferences.setString(key("loginPassword"), value)
+        }
+
     fun applyTo(service: OllamaService) {
-        service.updateConfig(baseUrl, timeoutSeconds)
+        service.updateConfig(baseUrl, timeoutSeconds, useBurpHttpApi)
     }
 
     companion object {

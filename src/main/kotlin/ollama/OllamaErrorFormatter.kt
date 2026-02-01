@@ -22,15 +22,29 @@ object OllamaErrorFormatter {
             """.trimIndent()
         }
 
-        // Connection refused
+        // Connection refused / unreachable
         if (msg.contains("Connection refused", ignoreCase = true) ||
-            msg.contains("Connection reset", ignoreCase = true)
+            msg.contains("Connection reset", ignoreCase = true) ||
+            msg.contains("No route to host", ignoreCase = true) ||
+            msg.contains("Network is unreachable", ignoreCase = true)
         ) {
             return """
                 Cannot connect to Ollama at $baseUrl
 
                 • Is Ollama running? Start it from the Ollama app or run: ollama serve
                 • Check the URL in Settings > Burp Ollama
+            """.trimIndent()
+        }
+
+        // Unknown host / DNS
+        if (msg.contains("Unknown host", ignoreCase = true) ||
+            msg.contains("nodename nor servname provided", ignoreCase = true)
+        ) {
+            return """
+                Cannot resolve host for $baseUrl
+
+                • Check the URL in Settings > Burp Ollama
+                • For localhost, ensure Ollama is running
             """.trimIndent()
         }
 

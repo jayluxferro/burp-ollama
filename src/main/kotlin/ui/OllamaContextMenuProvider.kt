@@ -1,5 +1,7 @@
 package ui
 
+import burp.api.montoya.scanner.audit.issues.AuditIssue
+import burp.api.montoya.ui.contextmenu.AuditIssueContextMenuEvent
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider
 import burp.api.montoya.ui.contextmenu.MessageEditorHttpRequestResponse
@@ -11,8 +13,9 @@ import javax.swing.JMenuItem
 import javax.swing.SwingUtilities
 
 /**
- * Context menu provider for "Ask Ollama" on request/response content.
- * Shows when in message editor (Repeater, Proxy, etc.) or when items selected from history.
+ * Context menu provider for "Ask Ollama" on request/response content and Scanner findings.
+ * Shows when in message editor (Repeater, Proxy, etc.), when items selected from history,
+ * or when Scanner audit issues are selected (Burp Professional).
  */
 class OllamaContextMenuProvider(
     private val config: OllamaConfig,
@@ -50,6 +53,20 @@ class OllamaContextMenuProvider(
         }
 
         return items
+    }
+
+    override fun provideMenuItems(event: AuditIssueContextMenuEvent): List<Component> {
+        val issues = event.selectedIssues()
+        if (issues.isEmpty()) return emptyList()
+
+        val menu = JMenu("Ask Ollama")
+        for (issue in issues) {
+            val text = ollama.OllamaAuditIssueFormatter.format(issue)
+            val shortName = issue.name().take(40) + if (issue.name().length > 40) "…" else ""
+            menu.add(createMenuItem("Analyze: $shortName", text, config.systemPromptAnalyze))
+            menu.add(createMenuItem("Validate false positive: $shortName", text, config.systemPromptValidateFalsePositive))
+        }
+        return listOf(menu)
     }
 
     private fun createPromptTemplateMenu(text: String, menuLabel: String): JMenu {
