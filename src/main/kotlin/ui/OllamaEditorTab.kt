@@ -14,6 +14,7 @@ import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Insets
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import javax.swing.DefaultComboBoxModel
@@ -28,6 +29,7 @@ import javax.swing.JSplitPane
 import javax.swing.JTextArea
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import java.awt.event.KeyEvent
@@ -95,7 +97,8 @@ class OllamaEditorPanel(
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
-        toolTipText = "Request/response content to send as context. Check Request/Response above."
+        margin = Insets(8, 8, 8, 8)
+        toolTipText = "Request/response content to send as context. Select text to use as focused context."
     }
     private val includeRequestCheck = JCheckBox("Request", hasRequest).apply {
         toolTipText = "Include full request in context"
@@ -105,6 +108,10 @@ class OllamaEditorPanel(
     }
     private val includeNotesCheck = JCheckBox("Notes", false).apply {
         toolTipText = "Include Repeater/tab notes in context"
+    }
+    private val useSelectionCheck = JCheckBox("Use selection", false).apply {
+        toolTipText = "Use selected text in preview as context (select text above first)"
+        isVisible = false
     }
     private val defaultModel: String get() = config.modelForTool(toolType ?: burp.api.montoya.core.ToolType.REPEATER)
     private val modelCombo = JComboBox<String>().apply {
@@ -121,6 +128,7 @@ class OllamaEditorPanel(
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
     }
     private val sendToRepeaterButton = JButton("Send to Repeater").apply {
         toolTipText = "Send detected HTTP request(s) from response to Repeater"
@@ -145,7 +153,8 @@ class OllamaEditorPanel(
         toolTipText = "Append AI response to Repeater tab notes"
         isEnabled = false
     }
-    private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
+    private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Querying Ollama…"))
         isVisible = false
@@ -154,19 +163,25 @@ class OllamaEditorPanel(
     private val conversationHistory = mutableListOf<Pair<String, String>>()
 
     init {
-        val topPanel = JPanel(BorderLayout())
+        border = EmptyBorder(UiConstants.PANEL_PADDING)
+        val topPanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
         topPanel.add(JScrollPane(contentPreview).apply {
             preferredSize = Dimension(0, 120)
         }, BorderLayout.CENTER)
 
-        val contextPanel = JPanel(FlowLayout(FlowLayout.LEFT))
+        val contextPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(0, 0, 6, 0)
+        }
         contextPanel.add(JLabel("Context:"))
         if (hasRequest) contextPanel.add(includeRequestCheck)
         if (hasResponse) contextPanel.add(includeResponseCheck)
         contextPanel.add(includeNotesCheck)
+        contextPanel.add(useSelectionCheck)
         topPanel.add(contextPanel, BorderLayout.NORTH)
 
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
         toolbar.add(modelCombo)
         toolbar.add(JButton("Refresh").apply {
@@ -196,10 +211,14 @@ class OllamaEditorPanel(
         toolbar.add(followUpField)
         topPanel.add(toolbar, BorderLayout.SOUTH)
 
-        val responsePanel = JPanel(BorderLayout())
+        val responsePanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
         val responseTop = JPanel(BorderLayout())
         responseTop.add(loadingPanel, BorderLayout.NORTH)
-        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
         responseToolbar.add(sendToRepeaterButton)
         responseToolbar.add(sendToIntruderButton)
         responseToolbar.add(sendToOrganizerButton)
@@ -218,6 +237,15 @@ class OllamaEditorPanel(
         includeRequestCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         includeResponseCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         includeNotesCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        useSelectionCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        contentPreview.addCaretListener {
+            val hasSelection = contentPreview.selectedText?.isNotBlank() == true
+            useSelectionCheck.isVisible = hasSelection
+            if (hasSelection) useSelectionCheck.toolTipText = "Use selected text (${contentPreview.selectedText!!.length} chars) as context"
+            else useSelectionCheck.isSelected = false
+            updateContentPreview()
+            updateAskButtonState()
+        }
         sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
         sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
         sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
@@ -275,6 +303,10 @@ class OllamaEditorPanel(
 
     private fun buildContextContent(): String {
         val rr = currentRequestResponse ?: return ""
+        if (useSelectionCheck.isSelected) {
+            val sel = contentPreview.selectedText?.trim()
+            if (!sel.isNullOrBlank()) return sel
+        }
         val parts = mutableListOf<String>()
         if (includeRequestCheck.isSelected && hasRequest) {
             getRequest(rr)?.takeIf { it.isNotBlank() }?.let { parts.add(it) }

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Conversation branching** – Suite Chat supports multiple branches; "New branch" forks from current point to try different follow-ups; branch switcher to switch between threads; "New conversation" to clear all and start fresh
+- **Token usage stats** – Ollama API token counts (prompt + eval) shown in Quick prompt, Suite Chat, Compare tab, and batch analysis responses when available
+- **Collaborator OOB payload suggestions** – Intruder submenu "Suggest OOB payloads" generates Burp Collaborator payloads and asks AI to suggest injection payloads (SSRF, XXE, command injection, etc.) using them; requires Burp Professional with Collaborator enabled; customizable prompt in Settings
+- **UI polish** – Consistent padding, spacing, and alignment across all Ollama UI components (Suite tab, Settings, dialogs, Repeater/Decoder tab); shared UiConstants for cohesive look
 - **Ask Ollama** – Context menu on selected text in Repeater, Proxy, Decoder
 - **Ollama tab** – Dedicated AI panel in HTTP request/response editors with conversation history
 - **Prompt templates** – Explain, Explain headers, Analyze JS, Find vulns
@@ -40,3 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Autonomous Explore settings** – Configurable max iterations (1–20), delay between requests (ms), and prompt in Settings
 - **Send to Organizer** – "Send to Organizer" button in Repeater, Suite tab, and response dialog; sends extracted HTTP requests, fetches response, adds to Organizer
 - **Recently analyzed list** – "Analyzed" tab in Ollama Suite tab showing items analyzed by Ollama (method + URL); auto-refreshes when new analyses complete
+- **Ctrl+E hotkey** – Explain selection in HTTP message editor; also available in command palette
+- **Use selection** – "Use selection" checkbox in Repeater Ollama tab when text is selected in content preview; uses selected text as focused context
+- **Stop button** – Stop button in Autonomous Explore streaming dialog to interrupt long-running exploration
+- **Executive summary** – AI-generated summary (findings, impact, next steps) appended when Autonomous Explore completes
+- **Quick prompt dialog** – Compact non-modal dialog for one-off AI queries; accessible via Ollama menu or "Quick prompt" button in Suite tab

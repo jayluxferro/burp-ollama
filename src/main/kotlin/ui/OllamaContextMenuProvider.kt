@@ -6,13 +6,27 @@ import burp.api.montoya.ui.contextmenu.AuditIssueContextMenuEvent
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider
 import burp.api.montoya.ui.contextmenu.MessageEditorHttpRequestResponse
+import burp.api.montoya.ui.hotkey.HotKeyEvent
 import ollama.OllamaConfig
+import ollama.OllamaModelCache
 import ollama.OllamaService
+import prompts.SecurityPrompts
 import java.awt.Component
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
+
+/**
+ * Shared state for context menu model/chain selection.
+ * Stored at class level so it persists across menu invocations (Burp may call provideMenuItems
+ * on different instances or the menu may be rebuilt; instance vars would be lost).
+ */
+private object ContextMenuModelState {
+    var modelOverride: String? = null
+    var bypassChain: Boolean = false
+}
 
 /**
  * Context menu provider for "Ask Ollama" on request/response content and Scanner findings.
@@ -24,8 +38,13 @@ class OllamaContextMenuProvider(
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showResponseDialog: (String, String, () -> Unit) -> Unit,
-    private val showStreamingResponseDialog: (String, (() -> Unit)?, Boolean) -> StreamingDialogCallbacks
+    private val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?) -> StreamingDialogCallbacks,
+    private val showBatchDialog: (String, List<Pair<String, String>>, String, String) -> Unit
 ) : ContextMenuItemsProvider {
+
+    private fun effectiveModel(): String = ContextMenuModelState.modelOverride ?: config.model
+
+    private fun useChain(): Boolean = config.isChainEnabled() && !ContextMenuModelState.bypassChain
 
     override fun provideMenuItems(event: ContextMenuEvent): List<Component> {
         val items = mutableListOf<Component>()
@@ -36,12 +55,13 @@ class OllamaContextMenuProvider(
             val text = getTextFromMessageEditor(messageEditor)
             if (text != null && text.isNotBlank()) {
                 val subMenu = createPromptTemplateMenu(text, "Ask Ollama", listOf(rr))
+                subMenu.add(createModelSelectorMenu(), 0)
                 if (OllamaAnalyzedItemsRegistry.wasAnalyzed(rr)) {
                     subMenu.add(JMenuItem("✓ Analyzed by Ollama").apply {
                         isEnabled = false
                         toolTipText = "This item was previously analyzed by Ollama"
-                    }, 0)
-                    subMenu.add(javax.swing.JSeparator(), 1)
+                    })
+                    subMenu.add(javax.swing.JSeparator())
                 }
                 items.add(subMenu)
             }
@@ -55,6 +75,7 @@ class OllamaContextMenuProvider(
         if (event.selectedRequestResponses().isNotEmpty()) {
             val selected = event.selectedRequestResponses()
             val subMenu = JMenu("Ask Ollama")
+            subMenu.add(createModelSelectorMenu())
             if (OllamaAnalyzedItemsRegistry.anyAnalyzed(selected)) {
                 subMenu.add(JMenuItem("✓ Analyzed by Ollama").apply {
                     isEnabled = false
@@ -77,6 +98,9 @@ class OllamaContextMenuProvider(
                     "--- Request ${i + 1} ---\n${rr.request()}\n\n--- Response ${i + 1} ---\n${rr.response()?.toString() ?: "(no response)"}"
                 }.joinToString("\n\n")
                 subMenu.add(createMenuItem("Analyze selected (${selected.size} items)", combined, config.systemPromptAnalyze, selected))
+                subMenu.add(javax.swing.JSeparator())
+                subMenu.add(createBatchMenuItem("Explain all (${selected.size} items)", selected, config.systemPromptExplain))
+                subMenu.add(createBatchMenuItem("Analyze all (${selected.size} items)", selected, config.systemPromptAnalyze))
             }
             if (subMenu.menuComponentCount > 0) {
                 items.add(subMenu)
@@ -90,11 +114,27 @@ class OllamaContextMenuProvider(
         return items
     }
 
+    /**
+     * Handle Ctrl+Shift+E hotkey: Explain selected text (or full message if no selection).
+     * Called when user presses the Explain hotkey in HTTP message editor.
+     */
+    fun handleExplainHotKey(event: HotKeyEvent) {
+        event.messageEditorRequestResponse().ifPresent { messageEditor ->
+            val text = getTextFromMessageEditor(messageEditor)
+            if (text != null && text.isNotBlank()) {
+                val rr = messageEditor.requestResponse()
+                runPromptRequest("Explain", text, config.systemPromptExplain, listOf(rr), effectiveModel())
+            }
+        }
+    }
+
     override fun provideMenuItems(event: AuditIssueContextMenuEvent): List<Component> {
         val issues = event.selectedIssues()
         if (issues.isEmpty()) return emptyList()
 
         val menu = JMenu("Ask Ollama")
+        menu.add(createModelSelectorMenu())
+        menu.add(javax.swing.JSeparator())
         for (issue in issues) {
             val text = ollama.OllamaAuditIssueFormatter.format(issue)
             val shortName = issue.name().take(40) + if (issue.name().length > 40) "…" else ""
@@ -106,12 +146,61 @@ class OllamaContextMenuProvider(
         return listOf(menu)
     }
 
+    private fun createModelSelectorMenu(): JMenu {
+        val menu = JMenu("Use model")
+        menu.toolTipText = "Select model for this and subsequent context menu actions"
+        if (config.isChainEnabled()) {
+            menu.add(JMenuItem("Use chain (${config.chainModelA()}→${config.chainModelB()})").apply {
+                addActionListener { ContextMenuModelState.bypassChain = false }
+            })
+            menu.add(JMenuItem("Use single model").apply {
+                toolTipText = "Bypass chain for next action"
+                addActionListener { ContextMenuModelState.bypassChain = true }
+            })
+            menu.add(javax.swing.JSeparator())
+        }
+        menu.add(JMenuItem("Default (${config.model})").apply {
+            addActionListener { ContextMenuModelState.modelOverride = null }
+        })
+        val cached = OllamaModelCache.models
+        if (cached.isNotEmpty()) {
+            menu.add(javax.swing.JSeparator())
+            for (m in cached) {
+                if (m == config.model) continue // already have Default
+                menu.add(JMenuItem(m).apply {
+                    addActionListener { ContextMenuModelState.modelOverride = m }
+                })
+            }
+        }
+        menu.add(javax.swing.JSeparator())
+        menu.add(JMenuItem("Refresh models").apply {
+            toolTipText = "Fetch available models from Ollama"
+            addActionListener {
+                config.applyTo(ollamaService)
+                ollamaService.execute {
+                    val result = ollamaService.listModels()
+                    if (result.isSuccess) {
+                        OllamaModelCache.update(result.getOrNull() ?: emptyList())
+                    }
+                }
+            }
+        })
+        return menu
+    }
+
     private fun createPromptTemplateMenu(text: String, menuLabel: String, analyzedItems: List<burp.api.montoya.http.message.HttpRequestResponse>? = null): JMenu {
         val menu = JMenu(menuLabel)
         menu.add(createMenuItem("Explain", text, config.systemPromptExplain, analyzedItems))
         menu.add(createMenuItem("Explain headers", text, config.systemPromptExplainHeaders, analyzedItems))
         menu.add(createMenuItem("Analyze JS", text, config.systemPromptDecipher, analyzedItems))
         menu.add(createMenuItem("Find vulns", text, config.systemPromptAnalyze, analyzedItems))
+        val custom = config.getCustomPrompts()
+        if (custom.isNotEmpty()) {
+            menu.add(javax.swing.JSeparator())
+            for ((name, prompt) in custom) {
+                menu.add(createMenuItem(name, text, prompt, analyzedItems))
+            }
+        }
         return menu
     }
 
@@ -121,16 +210,17 @@ class OllamaContextMenuProvider(
             toolTipText = "Suggest follow-up requests to validate or exploit"
             addActionListener {
                 config.applyTo(ollamaService)
-                val model = config.model
+                val model = effectiveModel()
                 val numCtx = config.numCtx
                 val taskId = OllamaTaskRegistry.addTask(truncated.take(100), "Context menu: Explore issue")
 
-                fun doRequest() {
-                    val callbacks = showStreamingResponseDialog("Explore issue", { doRequest() }, true)
+                fun doRequest(modelOverride: String? = null) {
+                    val m = modelOverride ?: model
+                    val callbacks = showStreamingResponseDialog("Explore issue", { overrideModel -> doRequest(overrideModel) }, true, null)
                     callbacks.setContent("Loading…")
                     if (config.streaming) {
                         var firstChunk = true
-                        ollamaService.chatStreamAsync(model, config.systemPromptExploreIssue, truncated, numCtx) { chunk ->
+                        ollamaService.chatStreamAsync(m, config.systemPromptExploreIssue, truncated, numCtx) { chunk ->
                             if (firstChunk) {
                                 firstChunk = false
                                 callbacks.setContent(chunk)
@@ -145,7 +235,7 @@ class OllamaContextMenuProvider(
                                     },
                                     onFailure = { err ->
                                         val friendlyMessage = ollama.OllamaErrorFormatter.format(
-                                            err, config.baseUrl, config.model
+                                            err, config.baseUrl, m
                                         )
                                         OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
                                         callbacks.setFailed(friendlyMessage)
@@ -154,17 +244,18 @@ class OllamaContextMenuProvider(
                             }
                         }
                     } else {
-                        ollamaService.chatAsync(model, config.systemPromptExploreIssue, truncated, numCtx)
+                        ollamaService.chatAsync(m, config.systemPromptExploreIssue, truncated, numCtx)
                             .thenAccept { result ->
                                 SwingUtilities.invokeLater {
                                     result.fold(
-                                        onSuccess = { response ->
-                                            OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, response)
-                                            callbacks.setContent(response)
+                                        onSuccess = { chatResult ->
+                                            val usage = formatTokenUsage(chatResult)
+                                            OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, chatResult.content)
+                                            callbacks.setContent(chatResult.content + usage)
                                         },
                                         onFailure = { err ->
                                             val friendlyMessage = ollama.OllamaErrorFormatter.format(
-                                                err, config.baseUrl, config.model
+                                                err, config.baseUrl, m
                                             )
                                             OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
                                             callbacks.setFailed(friendlyMessage)
@@ -197,10 +288,11 @@ class OllamaContextMenuProvider(
                 if (!confirmed) return@addActionListener
 
                 config.applyTo(ollamaService)
-                val model = config.model
+                val model = effectiveModel()
                 val numCtx = config.numCtx
                 val taskId = OllamaTaskRegistry.addTask("Autonomous Explore: $shortName", "Context menu: Autonomous Explore")
-                val callbacks = showStreamingResponseDialog("Autonomous Explore", null, true)
+                val stopRequested = AtomicBoolean(false)
+                val callbacks = showStreamingResponseDialog("Autonomous Explore", null, true, stopRequested)
                 callbacks.setContent("Starting autonomous exploration…\n\n")
 
                 ollamaService.execute {
@@ -211,7 +303,8 @@ class OllamaContextMenuProvider(
                         callbacks = callbacks,
                         taskId = taskId,
                         maxIterations = config.autonomousExploreMaxIterations,
-                        delayMs = config.autonomousExploreDelayMs
+                        delayMs = config.autonomousExploreDelayMs,
+                        stopRequested = stopRequested
                     )
                 }
             }
@@ -225,12 +318,17 @@ class OllamaContextMenuProvider(
         callbacks: StreamingDialogCallbacks,
         taskId: Long,
         maxIterations: Int = 5,
-        delayMs: Int = 500
+        delayMs: Int = 500,
+        stopRequested: AtomicBoolean? = null
     ) {
         var context = "Scanner finding:\n$truncated"
         var iter = 0
 
         while (iter < maxIterations) {
+            if (stopRequested?.get() == true) {
+                appendExecutiveSummaryAndComplete(callbacks, taskId, model, numCtx, prefix = "\n--- Stopped by user ---\n")
+                return
+            }
             val prompt = if (iter == 0) {
                 "$context\n\nOutput ONE raw HTTP/1.1 follow-up request, or DONE if none needed."
             } else {
@@ -238,7 +336,7 @@ class OllamaContextMenuProvider(
             }
 
             val result = ollamaService.chat(model, config.systemPromptAutonomousExplore, prompt, numCtx)
-            val response = result.getOrNull()?.trim() ?: break
+            val response = result.getOrNull()?.content?.trim() ?: break
 
             SwingUtilities.invokeLater {
                 callbacks.append("\n--- Step ${iter + 1} ---\n")
@@ -246,10 +344,7 @@ class OllamaContextMenuProvider(
             }
 
             if (response.uppercase().contains("DONE")) {
-                SwingUtilities.invokeLater {
-                    callbacks.append("\n--- Complete ---\n")
-                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, callbacks.getContent())
-                }
+                appendExecutiveSummaryAndComplete(callbacks, taskId, model, numCtx)
                 return
             }
 
@@ -265,10 +360,8 @@ class OllamaContextMenuProvider(
             }
 
             if (!montoyaApi.scope().isInScope(url)) {
-                SwingUtilities.invokeLater {
-                    callbacks.append("Skipped: $url (out of scope)\n")
-                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, callbacks.getContent())
-                }
+                SwingUtilities.invokeLater { callbacks.append("Skipped: $url (out of scope)\n") }
+                appendExecutiveSummaryAndComplete(callbacks, taskId, model, numCtx)
                 return
             }
 
@@ -300,9 +393,49 @@ class OllamaContextMenuProvider(
             iter++
         }
 
+        appendExecutiveSummaryAndComplete(callbacks, taskId, model, numCtx, prefix = "\n--- Complete (max iterations) ---\n")
+    }
+
+    private fun appendExecutiveSummaryAndComplete(
+        callbacks: StreamingDialogCallbacks,
+        taskId: Long,
+        model: String,
+        numCtx: Int,
+        prefix: String = "\n--- Complete ---\n"
+    ) {
+        SwingUtilities.invokeLater { callbacks.append(prefix) }
+        SwingUtilities.invokeLater { callbacks.append("\nGenerating executive summary…\n") }
+        val fullContent = callbacks.getContent()
+        val summaryResult = ollamaService.chat(model, SecurityPrompts.DEFAULT_EXEC_SUMMARY, fullContent, numCtx)
+        val summary = summaryResult.getOrNull()?.content?.trim() ?: "(Summary generation failed)"
         SwingUtilities.invokeLater {
-            callbacks.append("\n--- Complete (max iterations) ---\n")
+            callbacks.append("\n--- Executive Summary ---\n$summary\n")
             OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, callbacks.getContent())
+        }
+    }
+
+    private fun createBatchMenuItem(
+        label: String,
+        selected: List<burp.api.montoya.http.message.HttpRequestResponse>,
+        systemPrompt: String
+    ): JMenuItem {
+        return JMenuItem(label).apply {
+            toolTipText = "Run same prompt on each item; results shown in tabs"
+            addActionListener {
+                val items = selected.mapIndexed { i, rr ->
+                    val req = rr.request().toString()
+                    val resp = rr.response()?.toString() ?: "(no response)"
+                    val scopeContext = try {
+                        val url = rr.request().url().toString()
+                        if (montoyaApi.scope().isInScope(url)) "Context: In Burp scope. Target: $url\n\n" else ""
+                    } catch (_: Exception) { "" }
+                    val text = scopeContext + "--- Request ---\n$req\n\n--- Response ---\n$resp"
+                    val url = try { rr.request().url().toString() } catch (_: Exception) { "" }
+                    val shortLabel = if (url.isNotBlank()) "Item ${i + 1}: ${url.take(50)}…" else "Item ${i + 1}"
+                    shortLabel to text
+                }
+                showBatchDialog(label, items, systemPrompt, effectiveModel())
+            }
         }
     }
 
@@ -311,7 +444,160 @@ class OllamaContextMenuProvider(
         menu.toolTipText = "AI suggestions for Burp Intruder"
         menu.add(createMenuItem("Suggest payloads", requestText, config.systemPromptIntruderPayloads, analyzedItems))
         menu.add(createMenuItem("Suggest attack type", requestText, config.systemPromptIntruderAttackType, analyzedItems))
+        menu.add(createOobPayloadsMenuItem(requestText, analyzedItems))
         return menu
+    }
+
+    private fun createOobPayloadsMenuItem(requestText: String, analyzedItems: List<burp.api.montoya.http.message.HttpRequestResponse>?): JMenuItem {
+        return JMenuItem("Suggest OOB payloads").apply {
+            toolTipText = "Suggest payloads using Burp Collaborator (Professional). Requires Collaborator enabled."
+            addActionListener {
+                val payloads = getCollaboratorPayloads()
+                if (payloads == null || payloads.isEmpty()) {
+                    JOptionPane.showMessageDialog(
+                        null,
+                        "Burp Collaborator is not available. OOB payload suggestions require Burp Professional with Collaborator enabled.\n\nEnsure Collaborator is configured in Project settings > Misc > Burp Collaborator server.",
+                        "Collaborator Unavailable",
+                        JOptionPane.WARNING_MESSAGE
+                    )
+                    return@addActionListener
+                }
+                val oobBlock = buildString {
+                    append("\n\n--- Burp Collaborator OOB payloads (use these in suggestions) ---\n")
+                    payloads.forEach { append(it).append("\n") }
+                }
+                val augmentedText = requestText + oobBlock
+                runPromptRequest(
+                    label = "Suggest OOB payloads",
+                    text = augmentedText,
+                    systemPrompt = config.systemPromptIntruderOobPayloads,
+                    analyzedItems = analyzedItems
+                )
+            }
+        }
+    }
+
+    private fun getCollaboratorPayloads(): List<String>? {
+        return try {
+            val generator = montoyaApi.collaborator().defaultPayloadGenerator()
+            val payloads = mutableListOf<String>()
+            repeat(3) { payloads.add(generator.generatePayload().toString()) }
+            payloads
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun runPromptRequest(
+        label: String,
+        text: String,
+        systemPrompt: String,
+        analyzedItems: List<burp.api.montoya.http.message.HttpRequestResponse>?,
+        model: String = effectiveModel()
+    ) {
+        config.applyTo(ollamaService)
+        val numCtx = config.numCtx
+        val truncated = buildUserMessageWithScope(text, analyzedItems)
+        val taskId = OllamaTaskRegistry.addTask(truncated.take(100), "Context menu: $label")
+
+        fun doRequest(modelOverride: String? = null) {
+            val m = modelOverride ?: model
+            val useChain = useChain()
+            if (useChain) {
+                val callbacks = showStreamingResponseDialog("Ollama Response (chain)", { overrideModel -> doRequest(overrideModel) }, false, null)
+                callbacks.setContent("Loading (${config.chainModelA()})…")
+                ollamaService.chatAsync(config.chainModelA(), systemPrompt, truncated, numCtx)
+                    .thenAccept { step1 ->
+                        step1.fold(
+                            onSuccess = { chatResult ->
+                                val outputA = chatResult.content
+                                SwingUtilities.invokeLater { callbacks.setContent("Model A complete. Refining (${config.chainModelB()})…") }
+                                ollamaService.chatAsync(config.chainModelB(), config.chainRefinePrompt(), outputA, numCtx)
+                                    .thenAccept { result ->
+                                        SwingUtilities.invokeLater {
+                                            result.fold(
+                                                onSuccess = { chatResult2 ->
+                                                    val usage = formatTokenUsage(chatResult2)
+                                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, chatResult2.content)
+                                                    callbacks.setContent(chatResult2.content + usage)
+                                                    analyzedItems?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
+                                                },
+                                                onFailure = { err ->
+                                                    val friendlyMessage = ollama.OllamaErrorFormatter.format(
+                                                        err, config.baseUrl, config.chainModelB()
+                                                    )
+                                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
+                                                    callbacks.setFailed(friendlyMessage)
+                                                }
+                                            )
+                                        }
+                                    }
+                            },
+                            onFailure = { err ->
+                                SwingUtilities.invokeLater {
+                                    val friendlyMessage = ollama.OllamaErrorFormatter.format(
+                                        err, config.baseUrl, config.chainModelA()
+                                    )
+                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
+                                    callbacks.setFailed(friendlyMessage)
+                                }
+                            }
+                        )
+                    }
+            } else if (config.streaming) {
+                val callbacks = showStreamingResponseDialog("Ollama Response", { overrideModel -> doRequest(overrideModel) }, false, null)
+                callbacks.setContent("Loading…")
+                var firstChunk = true
+                ollamaService.chatStreamAsync(m, systemPrompt, truncated, numCtx) { chunk ->
+                    if (firstChunk) {
+                        firstChunk = false
+                        callbacks.setContent(chunk)
+                    } else {
+                        callbacks.append(chunk)
+                    }
+                }.thenAccept { result ->
+                    SwingUtilities.invokeLater {
+                        result.fold(
+                            onSuccess = {
+                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, callbacks.getContent())
+                                analyzedItems?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
+                            },
+                            onFailure = { err ->
+                                val friendlyMessage = ollama.OllamaErrorFormatter.format(
+                                    err, config.baseUrl, m
+                                )
+                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
+                                callbacks.setFailed(friendlyMessage)
+                            }
+                        )
+                    }
+                }
+            } else {
+                val callbacks = showStreamingResponseDialog("Ollama Response", { overrideModel -> doRequest(overrideModel) }, false, null)
+                callbacks.setContent("Loading…")
+                ollamaService.chatAsync(m, systemPrompt, truncated, numCtx)
+                    .thenAccept { result ->
+                        SwingUtilities.invokeLater {
+                            result.fold(
+                                onSuccess = { chatResult ->
+                                    val usage = formatTokenUsage(chatResult)
+                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, chatResult.content)
+                                    callbacks.setContent(chatResult.content + usage)
+                                    analyzedItems?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
+                                },
+                                onFailure = { err ->
+                                    val friendlyMessage = ollama.OllamaErrorFormatter.format(
+                                        err, config.baseUrl, m
+                                    )
+                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
+                                    callbacks.setFailed(friendlyMessage)
+                                }
+                            )
+                        }
+                    }
+            }
+        }
+        doRequest()
     }
 
     private fun createMenuItem(
@@ -320,69 +606,8 @@ class OllamaContextMenuProvider(
         systemPrompt: String = config.systemPromptExplain,
         analyzedItems: List<burp.api.montoya.http.message.HttpRequestResponse>? = null
     ): JMenuItem {
-        val truncated = truncateForContext(text)
         return JMenuItem(label).apply {
-            addActionListener {
-                config.applyTo(ollamaService)
-                val model = config.model
-                val numCtx = config.numCtx
-                val taskId = OllamaTaskRegistry.addTask(truncated.take(100), "Context menu: $label")
-
-                fun doRequest() {
-                    if (config.streaming) {
-                        val callbacks = showStreamingResponseDialog("Ollama Response", { doRequest() }, false)
-                        callbacks.setContent("Loading…")
-                        var firstChunk = true
-                        ollamaService.chatStreamAsync(model, systemPrompt, truncated, numCtx) { chunk ->
-                            if (firstChunk) {
-                                firstChunk = false
-                                callbacks.setContent(chunk)
-                            } else {
-                                callbacks.append(chunk)
-                            }
-                        }.thenAccept { result ->
-                            SwingUtilities.invokeLater {
-                                result.fold(
-                                    onSuccess = {
-                                        OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, callbacks.getContent())
-                                        analyzedItems?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
-                                    },
-                                    onFailure = { err ->
-                                        val friendlyMessage = ollama.OllamaErrorFormatter.format(
-                                            err, config.baseUrl, config.model
-                                        )
-                                        OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
-                                        callbacks.setFailed(friendlyMessage)
-                                    }
-                                )
-                            }
-                        }
-                    } else {
-                        val callbacks = showStreamingResponseDialog("Ollama Response", { doRequest() }, false)
-                        callbacks.setContent("Loading…")
-                        ollamaService.chatAsync(model, systemPrompt, truncated, numCtx)
-                            .thenAccept { result ->
-                                SwingUtilities.invokeLater {
-                                    result.fold(
-                                        onSuccess = { response ->
-                                            OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, response)
-                                            callbacks.setContent(response)
-                                            analyzedItems?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
-                                        },
-                                        onFailure = { err ->
-                                            val friendlyMessage = ollama.OllamaErrorFormatter.format(
-                                                err, config.baseUrl, config.model
-                                            )
-                                            OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = friendlyMessage)
-                                            callbacks.setFailed(friendlyMessage)
-                                        }
-                                    )
-                                }
-                            }
-                    }
-                }
-                doRequest()
-            }
+            addActionListener { runPromptRequest(label, text, systemPrompt, analyzedItems, effectiveModel()) }
         }
     }
 
@@ -407,8 +632,29 @@ class OllamaContextMenuProvider(
         return rr.request().toString().takeIf { it.isNotBlank() }
     }
 
+    private fun formatTokenUsage(result: ollama.ChatResult): String {
+        val (p, e) = result.promptTokens to result.evalTokens
+        if (p != null && e != null) return "\n\n---\nTokens: $p in, $e out"
+        return ""
+    }
+
     private fun truncateForContext(text: String, maxChars: Int = 12_000): String {
         if (text.length <= maxChars) return text
         return text.take(maxChars) + "\n\n… [truncated, ${text.length - maxChars} chars omitted]"
+    }
+
+    private fun buildUserMessageWithScope(
+        text: String,
+        analyzedItems: List<burp.api.montoya.http.message.HttpRequestResponse>?
+    ): String {
+        val scopeContext = analyzedItems?.firstOrNull()?.let { rr ->
+            try {
+                val url = rr.request().url().toString()
+                if (montoyaApi.scope().isInScope(url)) {
+                    "Context: This request is in Burp scope. Target: $url\n\n"
+                } else null
+            } catch (_: Exception) { null }
+        } ?: ""
+        return truncateForContext(scopeContext + text)
     }
 }

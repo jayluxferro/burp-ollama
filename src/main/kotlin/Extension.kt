@@ -1,16 +1,22 @@
 import burp.api.montoya.BurpExtension
 import burp.api.montoya.MontoyaApi
+import burp.api.montoya.ui.hotkey.HotKey
+import burp.api.montoya.ui.hotkey.HotKeyContext
 import proactive.OllamaProactiveHandler
 import session.OllamaLoginSessionAction
 import ui.OllamaContextMenuProvider
 import ui.OllamaHttpRequestEditorProvider
 import ui.OllamaHttpResponseEditorProvider
+import ui.OllamaBatchDialog
 import ui.OllamaResponseDialog
 import ui.StreamingDialogCallbacks
+import ui.OllamaQuickPromptDialog
 import ui.OllamaSettingsPanel
 import ui.OllamaSuiteTab
 import ollama.OllamaConfig
+import ollama.OllamaModelCache
 import ollama.OllamaService
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.JOptionPane
 
 class Extension : BurpExtension {
@@ -26,6 +32,9 @@ class Extension : BurpExtension {
         ollamaService = OllamaService(montoyaApi = api)
         config = OllamaConfig(api.persistence().preferences())
         config.applyTo(ollamaService)
+        ollamaService.execute {
+            ollamaService.listModels().getOrNull()?.let { OllamaModelCache.update(it) }
+        }
 
         val settingsPanel = OllamaSettingsPanel(
             config = config,
@@ -47,16 +56,39 @@ class Extension : BurpExtension {
             OllamaResponseDialog.show(frame, title, content, retry)
         }
 
-        val showStreamingResponseDialog: (String, (() -> Unit)?, Boolean) -> StreamingDialogCallbacks = { title, retry, withSendButtons ->
-            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null)
+        val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?) -> StreamingDialogCallbacks = { title, retry, withSendButtons, stopRequested ->
+            val onRefineWithChain = if (config.isChainEnabled()) {
+                { content: String, onSuccess: (String) -> Unit, onFailure: (String) -> Unit ->
+                    config.applyTo(ollamaService)
+                    ollamaService.execute {
+                        val result = ollamaService.chat(
+                            config.chainModelB(),
+                            config.chainRefinePrompt(),
+                            content,
+                            config.numCtx
+                        )
+                        javax.swing.SwingUtilities.invokeLater {
+                            result.fold(
+                                onSuccess = { onSuccess(it.content) },
+                                onFailure = { onFailure(ollama.OllamaErrorFormatter.format(it, config.baseUrl, config.chainModelB())) }
+                            )
+                        }
+                    }
+                }
+            } else null
+            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain)
         }
 
+        val showBatchDialog: (String, List<Pair<String, String>>, String, String) -> Unit = { title, items, systemPrompt, model ->
+            OllamaBatchDialog.show(frame, title, items, systemPrompt, model, ollamaService, config)
+        }
         val contextMenuProvider = OllamaContextMenuProvider(
             montoyaApi = api,
             config = config,
             ollamaService = ollamaService,
             showResponseDialog = showResponseDialog,
-            showStreamingResponseDialog = showStreamingResponseDialog
+            showStreamingResponseDialog = showStreamingResponseDialog,
+            showBatchDialog = showBatchDialog
         )
 
         val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
@@ -65,10 +97,23 @@ class Extension : BurpExtension {
 
         api.userInterface().registerSettingsPanel(settingsPanel)
         val ollamaSuiteTab = OllamaSuiteTab(api, config, ollamaService, showErrorDialog)
+        val ollamaMenu = javax.swing.JMenu("Ollama").apply {
+            add(javax.swing.JMenuItem("Quick prompt").apply {
+                addActionListener {
+                    OllamaQuickPromptDialog.show(frame, api, config, ollamaService, showErrorDialog)
+                }
+            })
+        }
+        api.userInterface().menuBar().registerMenu(ollamaMenu)
         api.userInterface().applyThemeToComponent(ollamaSuiteTab)
         api.userInterface().registerSuiteTab("Ollama", ollamaSuiteTab)
         api.http().registerSessionHandlingAction(OllamaLoginSessionAction(api, config))
         api.userInterface().registerContextMenuItemsProvider(contextMenuProvider)
+        val explainHotKey = HotKey.hotKey("Explain selection (Ollama)", "Ctrl+Shift+E")
+        api.userInterface().registerHotKeyHandler(
+            HotKeyContext.HTTP_MESSAGE_EDITOR,
+            explainHotKey
+        ) { event -> contextMenuProvider.handleExplainHotKey(event) }
         api.http().registerHttpHandler(OllamaProactiveHandler { config.proactiveSuggestionsEnabled })
         api.userInterface().registerHttpRequestEditorProvider(
             OllamaHttpRequestEditorProvider(api, config, ollamaService, showErrorDialog)
@@ -80,6 +125,6 @@ class Extension : BurpExtension {
 
         api.extension().registerUnloadingHandler { ollamaService.shutdown() }
 
-        api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text.")
+        api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text, or Ctrl+Shift+E to explain.")
     }
 }

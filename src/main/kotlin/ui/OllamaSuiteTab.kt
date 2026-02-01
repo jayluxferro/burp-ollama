@@ -4,10 +4,12 @@ import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.requests.HttpRequest
 import ollama.OllamaConfig
 import ollama.OllamaErrorFormatter
+import ollama.OllamaModelCache
 import ollama.OllamaService
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Insets
 import java.awt.datatransfer.StringSelection
 import java.awt.Toolkit
 import javax.swing.DefaultComboBoxModel
@@ -25,9 +27,11 @@ import javax.swing.JTextArea
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
+import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import java.awt.event.KeyEvent
+import java.util.concurrent.CompletableFuture
 
 /**
  * Unified Ollama Suite tab - central hub for AI interactions.
@@ -43,6 +47,7 @@ class OllamaSuiteTab(
     private val promptArea = JTextArea(5, 60).apply {
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
         toolTipText = "Enter your question or paste content to analyze. Ctrl+Enter to send."
     }
     private val modelCombo = JComboBox<String>().apply {
@@ -56,6 +61,7 @@ class OllamaSuiteTab(
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
     }
     private val sendToRepeaterButton = JButton("Send to Repeater").apply {
         toolTipText = "Send detected HTTP request(s) from response to Repeater"
@@ -76,12 +82,15 @@ class OllamaSuiteTab(
         toolTipText = "Copy formatted for vulnerability reports"
         isEnabled = false
     }
-    private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
+    private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Querying Ollama…"))
         isVisible = false
     }
-    private val conversationHistory = mutableListOf<Pair<String, String>>()
+    /** Branches: each branch is a list of (user, assistant) turns. Branch 0 = main. */
+    private val branches = mutableListOf<MutableList<Pair<String, String>>>(mutableListOf())
+    private var currentBranchIndex = 0
     private val taskListModel = DefaultListModel<String>()
     private val taskList = JList(taskListModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -90,6 +99,7 @@ class OllamaSuiteTab(
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
     }
     private val tasksHeaderLabel = JLabel("Recent tasks")
     private val suggestionListModel = DefaultListModel<String>()
@@ -100,6 +110,7 @@ class OllamaSuiteTab(
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
     }
     private val suggestionsHeaderLabel = JLabel("Proactive suggestions")
     private val analyzedListModel = DefaultListModel<String>()
@@ -109,14 +120,59 @@ class OllamaSuiteTab(
     private val analyzedHeaderLabel = JLabel("Recently analyzed items")
     private lateinit var tabbedPane: JTabbedPane
 
-    init {
-        val topPanel = JPanel(BorderLayout())
-        topPanel.add(JLabel("Ask Ollama (general queries). Use Repeater Ollama tab or right-click for context-aware analysis."), BorderLayout.NORTH)
-        topPanel.add(JScrollPane(promptArea).apply { preferredSize = Dimension(0, 100) }, BorderLayout.CENTER)
+    // Compare models
+    private val comparePromptArea = JTextArea(5, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
+        toolTipText = "Enter prompt to send to multiple models for comparison"
+    }
+    private val compareModelListModel = DefaultListModel<String>()
+    private val compareModelList = JList(compareModelListModel).apply {
+        selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+        toolTipText = "Select 2+ models to compare (Ctrl+click for multiple)"
+    }
+    private val compareButton = JButton("Compare models").apply {
+        toolTipText = "Send same prompt to selected models in parallel"
+    }
+    private val compareResultTabs = JTabbedPane().apply {
+        toolTipText = "Responses from each model"
+    }
+    private val compareLoadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        add(JProgressBar().apply { isIndeterminate = true })
+        add(JLabel("Comparing models…"))
+        isVisible = false
+    }
+    private val compareExportButton = JButton("Export").apply {
+        toolTipText = "Export comparison as Markdown to clipboard"
+    }
 
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+    init {
+        border = EmptyBorder(UiConstants.PANEL_PADDING)
+        val topPanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
+        topPanel.add(JLabel("Ask Ollama (general queries). Use Repeater Ollama tab or right-click for context-aware analysis.").apply {
+            border = EmptyBorder(0, 0, 6, 0)
+        }, BorderLayout.NORTH)
+        topPanel.add(JScrollPane(promptArea).apply {
+            preferredSize = Dimension(0, 100)
+            border = EmptyBorder(0, 0, 0, 0)
+        }, BorderLayout.CENTER)
+
+        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
         toolbar.add(modelCombo)
+        toolbar.add(JButton("Quick prompt").apply {
+            toolTipText = "Open compact dialog for one-off queries"
+            addActionListener {
+                OllamaQuickPromptDialog.show(
+                    javax.swing.SwingUtilities.getWindowAncestor(this@OllamaSuiteTab) as? java.awt.Frame,
+                    montoyaApi, config, ollamaService, showErrorDialog
+                )
+            }
+        })
         toolbar.add(JButton("Refresh").apply {
             toolTipText = "Refresh model list from Ollama"
             addActionListener {
@@ -139,13 +195,55 @@ class OllamaSuiteTab(
                 }
             }
         })
+        val branchCombo = JComboBox<String>().apply {
+            toolTipText = "Switch between conversation branches"
+            addItem("Main")
+            addActionListener {
+                val idx = selectedIndex
+                if (idx >= 0 && idx != currentBranchIndex && idx < branches.size) {
+                    currentBranchIndex = idx
+                    refreshResponseArea()
+                }
+            }
+        }
+        val newBranchButton = JButton("New branch").apply {
+            toolTipText = "Fork conversation from current point (try a different follow-up)"
+            addActionListener {
+                val current = branches[currentBranchIndex].toMutableList()
+                branches.add(current)
+                currentBranchIndex = branches.size - 1
+                branchCombo.addItem("Branch ${branches.size}")
+                branchCombo.selectedIndex = currentBranchIndex
+                refreshResponseArea()
+            }
+        }
+        val newConversationButton = JButton("New conversation").apply {
+            toolTipText = "Clear all branches and start fresh"
+            addActionListener {
+                branches.clear()
+                branches.add(mutableListOf())
+                currentBranchIndex = 0
+                branchCombo.removeAllItems()
+                branchCombo.addItem("Main")
+                branchCombo.selectedIndex = 0
+                refreshResponseArea()
+            }
+        }
+        toolbar.add(JLabel("Branch:"))
+        toolbar.add(branchCombo)
+        toolbar.add(newBranchButton)
+        toolbar.add(newConversationButton)
         toolbar.add(askButton)
         topPanel.add(toolbar, BorderLayout.SOUTH)
 
-        val responsePanel = JPanel(BorderLayout())
+        val responsePanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
         val responseTop = JPanel(BorderLayout())
         responseTop.add(loadingPanel, BorderLayout.NORTH)
-        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
         responseToolbar.add(sendToRepeaterButton)
         responseToolbar.add(sendToIntruderButton)
         responseToolbar.add(sendToOrganizerButton)
@@ -160,8 +258,10 @@ class OllamaSuiteTab(
             resizeWeight = 0.35
         }, BorderLayout.CENTER)
 
-        val tasksPanel = JPanel(BorderLayout())
-        tasksPanel.add(tasksHeaderLabel, BorderLayout.NORTH)
+        val tasksPanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        }
+        tasksPanel.add(tasksHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         val tasksSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(taskList), JScrollPane(taskDetailArea))
         tasksSplit.resizeWeight = 0.5
         tasksPanel.add(tasksSplit, BorderLayout.CENTER)
@@ -184,8 +284,10 @@ class OllamaSuiteTab(
             }
         }
 
-        val suggestionsPanel = JPanel(BorderLayout())
-        suggestionsPanel.add(suggestionsHeaderLabel, BorderLayout.NORTH)
+        val suggestionsPanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        }
+        suggestionsPanel.add(suggestionsHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         val suggestionsSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(suggestionList), JScrollPane(suggestionDetailArea))
         suggestionsSplit.resizeWeight = 0.5
         suggestionsPanel.add(suggestionsSplit, BorderLayout.CENTER)
@@ -209,7 +311,9 @@ class OllamaSuiteTab(
                 OllamaSuggestionRegistry.clear()
             }
         }
-        val suggestionButtons = JPanel(FlowLayout(FlowLayout.LEFT))
+        val suggestionButtons = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
         suggestionButtons.add(useInChatButton)
         suggestionButtons.add(clearButton)
         suggestionsPanel.add(suggestionButtons, BorderLayout.SOUTH)
@@ -231,18 +335,48 @@ class OllamaSuiteTab(
             }
         }
 
-        val analyzedPanel = JPanel(BorderLayout())
-        analyzedPanel.add(analyzedHeaderLabel, BorderLayout.NORTH)
+        val analyzedPanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        }
+        analyzedPanel.add(analyzedHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         analyzedPanel.add(JScrollPane(analyzedList), BorderLayout.CENTER)
+
+        val comparePanel = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        }
+        val compareTop = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
+        compareTop.add(JLabel("Select 2+ models, enter prompt, then Compare. Responses shown side-by-side.").apply {
+            border = EmptyBorder(0, 0, 6, 0)
+        }, BorderLayout.NORTH)
+        compareTop.add(JScrollPane(comparePromptArea).apply { preferredSize = Dimension(0, 80) }, BorderLayout.CENTER)
+        val compareToolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
+        compareToolbar.add(JLabel("Models:"))
+        compareToolbar.add(JScrollPane(compareModelList).apply { preferredSize = Dimension(200, 80) })
+        compareToolbar.add(compareButton)
+        compareToolbar.add(compareExportButton)
+        compareToolbar.add(JButton("Refresh").apply {
+            addActionListener { refreshCompareModelList() }
+        })
+        compareTop.add(compareToolbar, BorderLayout.SOUTH)
+        comparePanel.add(compareTop, BorderLayout.NORTH)
+        val compareResultPanel = JPanel(BorderLayout())
+        compareResultPanel.add(compareLoadingPanel, BorderLayout.NORTH)
+        compareResultPanel.add(compareResultTabs, BorderLayout.CENTER)
+        comparePanel.add(compareResultPanel, BorderLayout.CENTER)
 
         tabbedPane = JTabbedPane()
         tabbedPane.addTab("Chat", chatPanel)
+        tabbedPane.addTab("Compare", comparePanel)
         tabbedPane.addTab("Tasks", tasksPanel)
         tabbedPane.addTab("Suggestions", suggestionsPanel)
         tabbedPane.addTab("Analyzed", analyzedPanel)
         add(tabbedPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
+        compareButton.addActionListener { onCompareModels() }
+        compareExportButton.addActionListener { onExportCompare() }
         sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
         sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
         sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
@@ -267,6 +401,7 @@ class OllamaSuiteTab(
 
         SwingUtilities.invokeLater {
             refreshModelCombo()
+            refreshCompareModelList()
             updateAskButtonState()
             updateCopyButtonState()
             refreshSuggestionsList()
@@ -345,7 +480,7 @@ class OllamaSuiteTab(
                         setLoading(false)
                         result.fold(
                             onSuccess = {
-                                conversationHistory.add(userMessage to responseArea.text)
+                                branches[currentBranchIndex].add(userMessage to responseArea.text)
                                 updateSendButtons()
                                 updateAskButtonState()
                                 OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, responseArea.text)
@@ -365,9 +500,9 @@ class OllamaSuiteTab(
                             setLoading(false)
                             result.fold(
                                 onSuccess = { response ->
-                                    if (conversationHistory.isNotEmpty()) responseArea.append("\n---\n")
+                                    if (branches[currentBranchIndex].isNotEmpty()) responseArea.append("\n---\n")
                                     responseArea.append(response)
-                                    conversationHistory.add(userMessage to response)
+                                    branches[currentBranchIndex].add(userMessage to response)
                                     updateSendButtons()
                                     updateAskButtonState()
                                     OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, response)
@@ -385,12 +520,19 @@ class OllamaSuiteTab(
         doRequest()
     }
 
+    private fun refreshResponseArea() {
+        val history = branches.getOrNull(currentBranchIndex) ?: emptyList()
+        responseArea.text = history.map { it.second }.joinToString("\n---\n")
+        updateSendButtons()
+        updateCopyButtonState()
+    }
+
     private fun buildMessages(systemPrompt: String, newUserMessage: String): List<ollama.ChatMessage> {
         val messages = mutableListOf<ollama.ChatMessage>()
         if (systemPrompt.isNotBlank()) {
             messages.add(ollama.ChatMessage(role = "system", content = systemPrompt))
         }
-        for ((user, assistant) in conversationHistory) {
+        for ((user, assistant) in branches[currentBranchIndex]) {
             messages.add(ollama.ChatMessage(role = "user", content = user))
             messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
         }
@@ -487,6 +629,115 @@ class OllamaSuiteTab(
         }
     }
 
+    private fun refreshCompareModelList() {
+        ollamaService.execute {
+            config.applyTo(ollamaService)
+            val models = ollamaService.listModels()
+            if (models.isSuccess) {
+                SwingUtilities.invokeLater {
+                    val list = models.getOrNull() ?: emptyList()
+                    OllamaModelCache.update(list)
+                    compareModelListModel.clear()
+                    (if (list.isEmpty()) listOf(config.modelSuite.ifBlank { config.model }) else list).forEach {
+                        compareModelListModel.addElement(it)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun onCompareModels() {
+        val indices = compareModelList.selectedIndices
+        if (indices.size < 2) {
+            showErrorDialog("Compare Models", "Select 2+ models to compare (Ctrl+click for multiple).") { }
+            return
+        }
+        val models = indices.map { compareModelListModel.getElementAt(it) }
+        val userMessage = comparePromptArea.text.trim()
+        if (userMessage.isBlank()) {
+            showErrorDialog("Compare Models", "Enter a prompt first.") { }
+            return
+        }
+
+        config.applyTo(ollamaService)
+        val numCtx = config.numCtx
+        val systemPrompt = config.systemPromptExplain
+
+        compareResultTabs.removeAll()
+        setCompareLoading(true)
+        compareButton.isEnabled = false
+
+        val futures = models.map { model ->
+            ollamaService.chatAsync(model, systemPrompt, userMessage, numCtx)
+                .thenAccept { result ->
+                    SwingUtilities.invokeLater {
+                        val textArea = JTextArea(15, 50).apply {
+                            isEditable = false
+                            lineWrap = true
+                            wrapStyleWord = true
+                        }
+                        result.fold(
+                            onSuccess = { cr ->
+                                val usage = if (cr.promptTokens != null && cr.evalTokens != null) "\n\n---\nTokens: ${cr.promptTokens} in, ${cr.evalTokens} out" else ""
+                                textArea.text = cr.content + usage
+                            },
+                            onFailure = { textArea.text = "Error: ${OllamaErrorFormatter.format(it, config.baseUrl, model)}" }
+                        )
+                        compareResultTabs.addTab(model, JScrollPane(textArea))
+                    }
+                }
+        }
+
+        CompletableFuture.allOf(*futures.toTypedArray()).thenAccept {
+            SwingUtilities.invokeLater {
+                setCompareLoading(false)
+                compareButton.isEnabled = true
+                if (models.size == 2) {
+                    val textA = (compareResultTabs.getComponentAt(0) as? JScrollPane)?.viewport?.view?.let { (it as? JTextArea)?.text ?: "" } ?: ""
+                    val textB = (compareResultTabs.getComponentAt(1) as? JScrollPane)?.viewport?.view?.let { (it as? JTextArea)?.text ?: "" } ?: ""
+                    val diffText = SimpleDiff.diff(textA, textB, models[0], models[1])
+                    val diffArea = JTextArea(15, 50).apply {
+                        isEditable = false
+                        lineWrap = false
+                        font = java.awt.Font("Monospaced", java.awt.Font.PLAIN, font.size)
+                    }
+                    diffArea.text = diffText
+                    compareResultTabs.addTab("Diff", JScrollPane(diffArea))
+                }
+            }
+        }
+    }
+
+    private fun setCompareLoading(loading: Boolean) {
+        compareLoadingPanel.isVisible = loading
+    }
+
+    private fun onExportCompare() {
+        val tabCount = compareResultTabs.tabCount
+        if (tabCount == 0) {
+            showErrorDialog("Export Compare", "No comparison results to export. Run Compare first.") { }
+            return
+        }
+        val prompt = comparePromptArea.text.trim()
+        val sb = StringBuilder()
+        sb.append("# Model Comparison\n\n")
+        if (prompt.isNotBlank()) sb.append("**Prompt:**\n$prompt\n\n")
+        sb.append("---\n\n")
+        for (i in 0 until tabCount) {
+            val modelName = compareResultTabs.getTitleAt(i)
+            val comp = compareResultTabs.getComponentAt(i)
+            val text = (comp as? JScrollPane)?.viewport?.view?.let { v ->
+                (v as? JTextArea)?.text ?: ""
+            } ?: ""
+            sb.append("## $modelName\n\n")
+            sb.append(text.trim())
+            sb.append("\n\n---\n\n")
+        }
+        sb.append("*Generated by Burp Ollama*")
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(sb.toString()), null)
+        showCopiedFeedback(compareExportButton)
+    }
+
     private fun refreshModelCombo() {
         ollamaService.execute {
             config.applyTo(ollamaService)
@@ -495,6 +746,7 @@ class OllamaSuiteTab(
                 SwingUtilities.invokeLater {
                     val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.modelSuite.ifBlank { config.model }
                     val list = models.getOrNull() ?: emptyList()
+                    OllamaModelCache.update(list)
                     val items = if (list.isEmpty()) listOf(current) else {
                         val mutable = list.toMutableList()
                         if (!mutable.contains(current)) mutable.add(0, current)

@@ -1,19 +1,26 @@
 package ui
 
+import ollama.OllamaModelCache
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.requests.HttpRequest
 import java.awt.BorderLayout
+import java.awt.Insets
+import java.util.concurrent.atomic.AtomicBoolean
 import java.awt.Dimension
 import java.awt.Frame
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JDialog
+import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
+import javax.swing.border.EmptyBorder
 import javax.swing.SwingUtilities
 
 /**
@@ -36,15 +43,18 @@ class OllamaResponseDialog(
     title: String,
     content: String,
     isError: Boolean = false,
-    retry: (() -> Unit)? = null,
+    retry: ((String?) -> Unit)? = null,
     modal: Boolean = true,
-    private val montoyaApi: MontoyaApi? = null
+    private val montoyaApi: MontoyaApi? = null,
+    private val stopRequested: AtomicBoolean? = null,
+    private val onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
 ) : JDialog(parent, title, modal) {
 
     private val textArea = JTextArea(content, 20, 60).apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
     }
 
     private val scrollPane = JScrollPane(textArea)
@@ -66,11 +76,42 @@ class OllamaResponseDialog(
             isEnabled = false
         }
     }
+    private val modelCombo = retry?.let {
+        JComboBox<String>().apply {
+            isEditable = true
+            val cached = OllamaModelCache.models
+            val items = if (cached.isEmpty()) listOf("llama3.2:3b") else cached
+            model = DefaultComboBoxModel(items.toTypedArray())
+            toolTipText = "Model to use when retrying"
+        }
+    }
     private val retryButton = retry?.let {
-        JButton("Retry").apply {
+        JButton("Retry with model").apply {
+            toolTipText = "Retry with the selected model"
             addActionListener {
+                val selected = (modelCombo?.editor?.item ?: modelCombo?.selectedItem)?.toString()?.trim()?.ifBlank { null }
                 dispose()
-                retry()
+                retry(selected)
+            }
+        }
+    }
+    private val stopButton = JButton("Stop").apply {
+        toolTipText = "Stop the current operation"
+        isVisible = stopRequested != null
+        addActionListener {
+            stopRequested?.set(true)
+        }
+    }
+    private val refineWithChainButton = onRefineWithChain?.let { refineCallback ->
+        JButton("Refine with chain").apply {
+            toolTipText = "Pass content through chain (model B refines)"
+            addActionListener {
+                val text = textArea.text
+                val btn = this
+                if (text.isNotBlank()) {
+                    isEnabled = false
+                    refineCallback(text, { refined -> setContent(refined); btn.isEnabled = true }, { err -> setFailed(err); btn.isEnabled = true })
+                }
             }
         }
     }
@@ -79,19 +120,29 @@ class OllamaResponseDialog(
         layout = BorderLayout()
         add(scrollPane, BorderLayout.CENTER)
 
-        val buttonPanel = JPanel(GridBagLayout())
+        val buttonPanel = JPanel(GridBagLayout()).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING)
+        }
         val gbc = GridBagConstraints().apply {
             gridx = 0
             gridy = 0
+            insets = Insets(0, 0, 0, UiConstants.TOOLBAR_GAP)
         }
 
-        if (isError && retryButton != null) {
-            retryButton.isVisible = true
+        if (retryButton != null) {
+            retryButton.isVisible = isError
+            modelCombo?.let { buttonPanel.add(JLabel("Model:"), gbc); gbc.gridx++; buttonPanel.add(it, gbc); gbc.gridx++ }
             buttonPanel.add(retryButton, gbc)
             gbc.gridx++
-        } else if (retryButton != null) {
-            retryButton.isVisible = false
-            buttonPanel.add(retryButton, gbc)
+        }
+
+        if (stopButton.isVisible) {
+            buttonPanel.add(stopButton, gbc)
+            gbc.gridx++
+        }
+
+        refineWithChainButton?.let {
+            buttonPanel.add(it, gbc)
             gbc.gridx++
         }
 
@@ -243,7 +294,8 @@ class OllamaResponseDialog(
         fun show(parent: Frame?, title: String, content: String, retry: (() -> Unit)? = null) {
             SwingUtilities.invokeLater {
                 val isError = title.contains("Error", ignoreCase = true)
-                val dialog = OllamaResponseDialog(parent, title, content, isError, retry)
+                val retryWithModel = retry?.let { r -> { _: String? -> r() } }
+                val dialog = OllamaResponseDialog(parent, title, content, isError, retryWithModel)
                 dialog.isVisible = true
             }
         }
@@ -252,19 +304,24 @@ class OllamaResponseDialog(
          * Create and show a non-modal dialog for streaming responses.
          * Returns callbacks for append, setFailed, setContent, and getContent.
          * When montoyaApi is provided, adds Send to Repeater/Intruder buttons for Explore issue.
+         * When stopRequested is provided, adds Stop button; caller should check stopRequested.get() each iteration.
          */
         fun showStreaming(
             parent: Frame?,
             title: String,
-            retry: (() -> Unit)? = null,
-            montoyaApi: MontoyaApi? = null
+            retry: ((String?) -> Unit)? = null,
+            montoyaApi: MontoyaApi? = null,
+            stopRequested: AtomicBoolean? = null,
+            onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
         ): StreamingDialogCallbacks {
             val dialog = OllamaResponseDialog(
                 parent, title, "",
                 isError = false,
                 retry = retry,
                 modal = false,
-                montoyaApi = montoyaApi
+                montoyaApi = montoyaApi,
+                stopRequested = stopRequested,
+                onRefineWithChain = onRefineWithChain
             )
             SwingUtilities.invokeLater {
                 dialog.isVisible = true

@@ -68,7 +68,7 @@ class OllamaServiceTest {
         )
         val result = service.chat("llama3.2:3b", "You are helpful.", "Why is the sky blue?")
         assertTrue(result.isSuccess)
-        assertEquals("The sky is blue.", result.getOrNull())
+        assertEquals("The sky is blue.", result.getOrNull()?.content)
     }
 
     @Test

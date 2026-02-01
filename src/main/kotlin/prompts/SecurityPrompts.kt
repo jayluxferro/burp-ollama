@@ -38,6 +38,14 @@ Suggest the best attack type: Sniper (one position), Battering ram (same payload
 Consider: number of injection points, whether they should share payloads, and the testing goal.
 Output: 1) Attack type name. 2) Brief reasoning. 3) Suggested payload positions (e.g. parameter names, body fields). Be concise."""
 
+    const val DEFAULT_INTRUDER_SUGGEST_OOB_PAYLOADS =
+        """You are a penetration tester. The user has provided Burp Collaborator out-of-band (OOB) payloads below.
+These payloads trigger DNS/HTTP callbacks when the target application processes them (e.g. SSRF, XXE, command injection).
+Analyze the HTTP request and suggest payloads that USE the provided OOB addresses. For each suggestion:
+1. Brief context (e.g. "SSRF - URL parameter", "Command injection - exec", "XXE - external entity")
+2. The exact payload using the OOB address (e.g. http://PAYLOAD/, $(nslookup PAYLOAD), etc.)
+Output 8-15 payloads, one per line. Include the OOB address verbatim in each payload. No preamble."""
+
     const val DEFAULT_EXPLORE_ISSUE =
         """You are a penetration tester. Analyze this Scanner finding and suggest step-by-step follow-up requests to validate or exploit it.
 For each suggested request:
@@ -55,4 +63,14 @@ Suggest 2-5 follow-up requests. Focus on: IDOR, access control, parameter tamper
 Output ONLY the raw HTTP request (no markdown, no explanation). Include Host and all required headers.
 If no further requests are needed (finding validated, or no more ideas), output exactly: DONE
 Be concise. One request per turn."""
+
+    const val DEFAULT_CHAIN_REFINE =
+        """You are a security expert. The following is AI-generated analysis. Refine it: improve clarity, fix errors, add missing details, and ensure it is actionable for a penetration tester. Keep the same structure and tone. Be concise."""
+
+    const val DEFAULT_EXEC_SUMMARY =
+        """You are a penetration tester. Summarize this security exploration log in 3-5 bullet points:
+1) Key findings (what was validated or discovered)
+2) Impact assessment (severity, exploitability)
+3) Recommended next steps (manual tests, report items)
+Be concise. Output plain text, no markdown."""
 }

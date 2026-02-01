@@ -133,7 +133,7 @@ class OllamaService(
         systemPrompt: String,
         userMessage: String,
         numCtx: Int? = null
-    ): Result<String> {
+    ): Result<ChatResult> {
         return try {
             val messages = mutableListOf<ChatMessage>()
             if (systemPrompt.isNotBlank()) {
@@ -173,12 +173,52 @@ class OllamaService(
             val content = chatResp.message?.content
             when {
                 chatResp.error != null -> Result.failure(OllamaException(chatResp.error))
-                content != null -> Result.success(content)
+                content != null -> Result.success(
+                    ChatResult(
+                        content = content,
+                        promptTokens = chatResp.promptEvalCount,
+                        evalTokens = chatResp.evalCount
+                    )
+                )
                 else -> Result.failure(OllamaException("Empty response from Ollama"))
             }
         } catch (e: Exception) {
             Result.failure(OllamaException("Chat failed: ${e.message}", e))
         }
+    }
+
+    /**
+     * Chain two models: A generates, B refines.
+     * Returns refined output from model B, or failure if either step fails.
+     */
+    fun chatChained(
+        modelA: String,
+        modelB: String,
+        refinePrompt: String,
+        systemPrompt: String,
+        userMessage: String,
+        numCtx: Int? = null
+    ): Result<ChatResult> {
+        val step1 = chat(modelA, systemPrompt, userMessage, numCtx)
+        val outputA = step1.getOrNull()?.content ?: return step1
+        return chat(modelB, refinePrompt, outputA, numCtx)
+    }
+
+    /**
+     * Async chain execution. Use for UI-triggered work.
+     */
+    fun chatChainedAsync(
+        modelA: String,
+        modelB: String,
+        refinePrompt: String,
+        systemPrompt: String,
+        userMessage: String,
+        numCtx: Int? = null
+    ): CompletableFuture<Result<ChatResult>> {
+        return CompletableFuture.supplyAsync(
+            { chatChained(modelA, modelB, refinePrompt, systemPrompt, userMessage, numCtx) },
+            executor
+        )
     }
 
     /**
@@ -203,7 +243,7 @@ class OllamaService(
         systemPrompt: String,
         userMessage: String,
         numCtx: Int? = null
-    ): CompletableFuture<Result<String>> {
+    ): CompletableFuture<Result<ChatResult>> {
         return CompletableFuture.supplyAsync({ chat(model, systemPrompt, userMessage, numCtx) }, executor)
     }
 

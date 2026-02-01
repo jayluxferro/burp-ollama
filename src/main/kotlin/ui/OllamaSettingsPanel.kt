@@ -1,6 +1,7 @@
 package ui
 
 import ollama.OllamaConfig
+import ollama.OllamaModelCache
 import ollama.OllamaService
 import prompts.SecurityPrompts
 import java.awt.BorderLayout
@@ -8,12 +9,17 @@ import java.awt.FlowLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
+import javax.swing.border.EmptyBorder
 import javax.swing.DefaultComboBoxModel
+import javax.swing.DefaultListModel
+import javax.swing.JOptionPane
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
+import javax.swing.JList
+import javax.swing.ListSelectionModel
 import javax.swing.JPanel
 import javax.swing.JPasswordField
 import javax.swing.JScrollPane
@@ -47,6 +53,32 @@ class OllamaSettingsPanel(
     }
     private val modelDecoderField = JTextField(config.modelDecoder, 30).apply {
         toolTipText = "Optional. Leave blank to use default model in Decoder (when Ollama tab is shown)."
+    }
+    private val chainModelAField = JTextField(config.chainModelA, 25).apply {
+        toolTipText = "First model in chain (generates initial response). Leave blank to disable chaining."
+    }
+    private val chainModelBField = JTextField(config.chainModelB, 25).apply {
+        toolTipText = "Second model in chain (refines output of model A)."
+    }
+    private val chainRefinePromptField = JTextArea(config.chainRefinePrompt, 2, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        toolTipText = "System prompt for the refiner model (model B)."
+    }
+    private val chainPresetCombo = javax.swing.JComboBox(arrayOf("Chain 1", "Chain 2")).apply {
+        selectedIndex = config.chainActivePreset
+        toolTipText = "Active chain preset"
+    }
+    private val chain2ModelAField = JTextField(config.chain2ModelA, 25).apply {
+        toolTipText = "Chain 2: first model"
+    }
+    private val chain2ModelBField = JTextField(config.chain2ModelB, 25).apply {
+        toolTipText = "Chain 2: second model"
+    }
+    private val chain2RefinePromptField = JTextArea(config.chain2RefinePrompt, 2, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        toolTipText = "Chain 2: refine prompt"
     }
     private val timeoutField = JTextField(config.timeoutSeconds.toString(), 8)
     private val numCtxField = JTextField(config.numCtx.toString(), 8)
@@ -113,6 +145,10 @@ class OllamaSettingsPanel(
         lineWrap = true
         wrapStyleWord = true
     }
+    private val promptIntruderOobPayloadsField = JTextArea(config.systemPromptIntruderOobPayloads, 2, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+    }
     private val promptExploreIssueField = JTextArea(config.systemPromptExploreIssue, 3, 50).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -125,16 +161,22 @@ class OllamaSettingsPanel(
     private val autonomousDelayField = JTextField(config.autonomousExploreDelayMs.toString(), 6).apply {
         toolTipText = "Delay between requests (ms). 0 = no delay."
     }
+    private val customPromptsListModel = DefaultListModel<String>()
+    private val customPromptsList = JList(customPromptsListModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        toolTipText = "Custom prompts appear in Ask Ollama context menu"
+    }
 
     private val formPanel = JPanel(GridBagLayout())
 
     init {
         val gbc = GridBagConstraints().apply {
             fill = GridBagConstraints.HORIZONTAL
-            insets = Insets(4, 4, 4, 4)
+            insets = Insets(UiConstants.FORM_ROW_GAP, 8, UiConstants.FORM_ROW_GAP, 8)
             gridx = 0
             gridy = 0
         }
+        formPanel.border = EmptyBorder(UiConstants.PANEL_PADDING)
 
         formPanel.add(JLabel("Ollama base URL:"), gbc)
         gbc.gridx = 1
@@ -144,7 +186,7 @@ class OllamaSettingsPanel(
 
         formPanel.add(JLabel("Model (default):"), gbc)
         gbc.gridx = 1
-        val modelPanel = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0))
+        val modelPanel = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         modelPanel.add(modelCombo)
         val refreshModelsButton = JButton("Refresh")
         refreshModelsButton.addActionListener {
@@ -172,6 +214,48 @@ class OllamaSettingsPanel(
         formPanel.add(JLabel("Model override (Decoder):"), gbc)
         gbc.gridx = 1
         formPanel.add(modelDecoderField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain model A:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(chainModelAField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain model B:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(chainModelBField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain refine prompt:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(JScrollPane(chainRefinePromptField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Active preset:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(chainPresetCombo, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain 2 model A:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(chain2ModelAField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain 2 model B:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(chain2ModelBField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Chain 2 refine prompt:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(JScrollPane(chain2RefinePromptField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -216,6 +300,56 @@ class OllamaSettingsPanel(
         formPanel.add(testButton, gbc)
         gbc.gridx = 1
         formPanel.add(JLabel(""), gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Prompts library:"), gbc)
+        gbc.gridx = 1
+        val promptsPanel = JPanel(BorderLayout())
+        promptsPanel.add(JScrollPane(customPromptsList).apply { preferredSize = java.awt.Dimension(400, 80) }, BorderLayout.CENTER)
+        val promptsButtons = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
+        promptsButtons.add(JButton("Add").apply {
+            addActionListener {
+                val nameField = JTextField(20)
+                val promptField = JTextArea(3, 40).apply { lineWrap = true; wrapStyleWord = true }
+                val r = JOptionPane.showConfirmDialog(
+                    this@OllamaSettingsPanel,
+                    JPanel(GridBagLayout()).apply {
+                        val g = GridBagConstraints()
+                        g.gridx = 0; g.gridy = 0; add(JLabel("Name:"), g)
+                        g.gridx = 1; add(nameField, g)
+                        g.gridy = 1; g.gridx = 0; add(JLabel("System prompt:"), g)
+                        g.gridx = 1; add(JScrollPane(promptField).apply { preferredSize = java.awt.Dimension(300, 60) }, g)
+                    },
+                    "Add custom prompt",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE
+                )
+                if (r == JOptionPane.OK_OPTION && nameField.text.trim().isNotBlank() && promptField.text.trim().isNotBlank()) {
+                    val prompts = config.getCustomPrompts().toMutableList()
+                    prompts.add(nameField.text.trim() to promptField.text.trim())
+                    config.setCustomPrompts(prompts)
+                    refreshCustomPromptsList()
+                }
+            }
+        })
+        promptsButtons.add(JButton("Remove").apply {
+            addActionListener {
+                val idx = customPromptsList.selectedIndex
+                if (idx >= 0) {
+                    val prompts = config.getCustomPrompts().toMutableList()
+                    if (idx < prompts.size) {
+                        prompts.removeAt(idx)
+                        config.setCustomPrompts(prompts)
+                        refreshCustomPromptsList()
+                    }
+                }
+            }
+        })
+        promptsPanel.add(promptsButtons, BorderLayout.SOUTH)
+        formPanel.add(promptsPanel, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -323,6 +457,12 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        formPanel.add(JLabel("Intruder suggest OOB payloads:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(JScrollPane(promptIntruderOobPayloadsField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
         formPanel.add(JLabel("Explore issue:"), gbc)
         gbc.gridx = 1
         formPanel.add(JScrollPane(promptExploreIssueField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
@@ -359,7 +499,9 @@ class OllamaSettingsPanel(
             timer.start()
         }
 
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(UiConstants.PANEL_PADDING)
+        }
         toolbar.add(saveButton)
         toolbar.add(statusLabel)
         add(toolbar, BorderLayout.NORTH)
@@ -385,7 +527,7 @@ class OllamaSettingsPanel(
                     generateLoginButton.isEnabled = true
                     when {
                         result.isSuccess -> {
-                            val template = result.getOrNull()?.trim() ?: ""
+                            val template = result.getOrNull()?.content?.trim() ?: ""
                             loginRequestTemplateField.text = template
                             config.loginRequestTemplate = template
                             onTestConnection("Generated login template. Review and edit if needed.")
@@ -413,10 +555,19 @@ class OllamaSettingsPanel(
         }
 
         // Load models on panel init (background)
-        SwingUtilities.invokeLater { refreshModelComboAsync() }
+        SwingUtilities.invokeLater {
+            refreshModelComboAsync()
+            refreshCustomPromptsList()
+        }
+    }
+
+    private fun refreshCustomPromptsList() {
+        customPromptsListModel.clear()
+        config.getCustomPrompts().forEach { (name, _) -> customPromptsListModel.addElement(name) }
     }
 
     private fun refreshModelCombo(models: List<String>) {
+        OllamaModelCache.update(models)
         val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim()?.ifBlank { null } ?: config.model
         val items = if (models.isEmpty()) {
             listOf(current)
@@ -445,6 +596,13 @@ class OllamaSettingsPanel(
         config.modelRepeater = modelRepeaterField.text.trim()
         config.modelSuite = modelSuiteField.text.trim()
         config.modelDecoder = modelDecoderField.text.trim()
+        config.chainModelA = chainModelAField.text.trim()
+        config.chainModelB = chainModelBField.text.trim()
+        config.chainRefinePrompt = chainRefinePromptField.text.ifBlank { SecurityPrompts.DEFAULT_CHAIN_REFINE }
+        config.chainActivePreset = chainPresetCombo.selectedIndex
+        config.chain2ModelA = chain2ModelAField.text.trim()
+        config.chain2ModelB = chain2ModelBField.text.trim()
+        config.chain2RefinePrompt = chain2RefinePromptField.text.ifBlank { SecurityPrompts.DEFAULT_CHAIN_REFINE }
         config.timeoutSeconds = timeoutField.text.toIntOrNull() ?: OllamaService.DEFAULT_TIMEOUT
         config.numCtx = numCtxField.text.toIntOrNull() ?: OllamaConfig.DEFAULT_NUM_CTX
         config.streaming = streamingCheck.isSelected
@@ -458,6 +616,7 @@ class OllamaSettingsPanel(
         config.systemPromptGenerateLogin = promptGenerateLoginField.text.ifBlank { SecurityPrompts.DEFAULT_GENERATE_LOGIN_SEQUENCE }
         config.systemPromptIntruderPayloads = promptIntruderPayloadsField.text.ifBlank { SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_PAYLOADS }
         config.systemPromptIntruderAttackType = promptIntruderAttackTypeField.text.ifBlank { SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_ATTACK_TYPE }
+        config.systemPromptIntruderOobPayloads = promptIntruderOobPayloadsField.text.ifBlank { SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_OOB_PAYLOADS }
         config.systemPromptExploreIssue = promptExploreIssueField.text.ifBlank { SecurityPrompts.DEFAULT_EXPLORE_ISSUE }
         config.systemPromptAutonomousExplore = promptAutonomousExploreField.text.ifBlank { SecurityPrompts.DEFAULT_AUTONOMOUS_EXPLORE }
         config.autonomousExploreMaxIterations = autonomousMaxIterField.text.toIntOrNull() ?: 5
@@ -478,6 +637,14 @@ class OllamaSettingsPanel(
         modelRepeaterField.text = config.modelRepeater
         modelSuiteField.text = config.modelSuite
         modelDecoderField.text = config.modelDecoder
+        chainModelAField.text = config.chainModelA
+        chainModelBField.text = config.chainModelB
+        chainRefinePromptField.text = config.chainRefinePrompt
+        chainPresetCombo.selectedIndex = config.chainActivePreset
+        chain2ModelAField.text = config.chain2ModelA
+        chain2ModelBField.text = config.chain2ModelB
+        chain2RefinePromptField.text = config.chain2RefinePrompt
+        refreshCustomPromptsList()
         timeoutField.text = config.timeoutSeconds.toString()
         numCtxField.text = config.numCtx.toString()
         streamingCheck.isSelected = config.streaming
@@ -491,6 +658,7 @@ class OllamaSettingsPanel(
         promptGenerateLoginField.text = config.systemPromptGenerateLogin
         promptIntruderPayloadsField.text = config.systemPromptIntruderPayloads
         promptIntruderAttackTypeField.text = config.systemPromptIntruderAttackType
+        promptIntruderOobPayloadsField.text = config.systemPromptIntruderOobPayloads
         promptExploreIssueField.text = config.systemPromptExploreIssue
         promptAutonomousExploreField.text = config.systemPromptAutonomousExplore
         autonomousMaxIterField.text = config.autonomousExploreMaxIterations.toString()
@@ -500,6 +668,7 @@ class OllamaSettingsPanel(
         loginRequestTemplateField.text = config.loginRequestTemplate
         loginUsernameField.text = config.loginUsername
         loginPasswordField.text = config.loginPassword
+        refreshCustomPromptsList()
     }
 
     override fun uiComponent(): JComponent = this

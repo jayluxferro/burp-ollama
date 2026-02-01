@@ -40,9 +40,14 @@ object OllamaResponseParser {
                 if (contentIdx >= 0) extractJsonString(body.substring(contentIdx), "content") else null
             } else null
 
+            val promptEvalCount = extractJsonInt(body, "prompt_eval_count")
+            val evalCount = extractJsonInt(body, "eval_count")
+
             val response = ChatResponse(
                 message = if (content != null) ChatResponseMessage(content = content) else null,
-                done = body.contains("\"done\":true")
+                done = body.contains("\"done\":true"),
+                promptEvalCount = promptEvalCount,
+                evalCount = evalCount
             )
             if (response.message == null && response.error == null && body.isNotBlank()) {
                 ChatResponse(error = "Failed to parse response")
@@ -73,5 +78,22 @@ object OllamaResponseParser {
             end++
         }
         return json.substring(startQuote + 1, end).replace("\\n", "\n").replace("\\\"", "\"")
+    }
+
+    fun extractJsonInt(json: String, key: String): Int? {
+        val keyPattern = "\"$key\""
+        val idx = json.indexOf(keyPattern, ignoreCase = true)
+        if (idx == -1) return null
+        val colonIdx = json.indexOf(':', idx)
+        if (colonIdx == -1) return null
+        var end = colonIdx + 1
+        while (end < json.length && json[end].isWhitespace()) end++
+        if (end >= json.length) return null
+        val numStr = StringBuilder()
+        while (end < json.length && (json[end].isDigit() || json[end] == '-')) {
+            numStr.append(json[end])
+            end++
+        }
+        return numStr.toString().toIntOrNull()
     }
 }
