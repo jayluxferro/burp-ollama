@@ -172,6 +172,12 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setString(key("systemPromptIntruderOobPayloads"), value)
         }
 
+    var systemPromptAskWithInstruction: String
+        get() = preferences.getString(key("systemPromptAskWithInstruction")) ?: SecurityPrompts.DEFAULT_ASK_WITH_INSTRUCTION
+        set(value) {
+            preferences.setString(key("systemPromptAskWithInstruction"), value)
+        }
+
     var systemPromptExploreIssue: String
         get() = preferences.getString(key("systemPromptExploreIssue")) ?: SecurityPrompts.DEFAULT_EXPLORE_ISSUE
         set(value) {

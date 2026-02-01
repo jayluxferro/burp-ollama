@@ -56,7 +56,7 @@ class Extension : BurpExtension {
             OllamaResponseDialog.show(frame, title, content, retry)
         }
 
-        val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?) -> StreamingDialogCallbacks = { title, retry, withSendButtons, stopRequested ->
+        val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?, ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)?) -> StreamingDialogCallbacks = { title, retry, withSendButtons, stopRequested, onFollowUp ->
             val onRefineWithChain = if (config.isChainEnabled()) {
                 { content: String, onSuccess: (String) -> Unit, onFailure: (String) -> Unit ->
                     config.applyTo(ollamaService)
@@ -76,11 +76,14 @@ class Extension : BurpExtension {
                     }
                 }
             } else null
-            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain)
+            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain, onFollowUp)
         }
 
         val showBatchDialog: (String, List<Pair<String, String>>, String, String) -> Unit = { title, items, systemPrompt, model ->
             OllamaBatchDialog.show(frame, title, items, systemPrompt, model, ollamaService, config)
+        }
+        val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
+            OllamaResponseDialog.show(frame, title, content, retry)
         }
         val contextMenuProvider = OllamaContextMenuProvider(
             montoyaApi = api,
@@ -88,12 +91,9 @@ class Extension : BurpExtension {
             ollamaService = ollamaService,
             showResponseDialog = showResponseDialog,
             showStreamingResponseDialog = showStreamingResponseDialog,
-            showBatchDialog = showBatchDialog
+            showBatchDialog = showBatchDialog,
+            showErrorDialog = showErrorDialog
         )
-
-        val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
-            OllamaResponseDialog.show(frame, title, content, retry)
-        }
 
         api.userInterface().registerSettingsPanel(settingsPanel)
         val ollamaSuiteTab = OllamaSuiteTab(api, config, ollamaService, showErrorDialog)

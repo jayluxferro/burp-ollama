@@ -19,9 +19,16 @@ import javax.swing.JDialog
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JTabbedPane
 import javax.swing.JTextArea
+import ui.MarkdownTextPane
+import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.TitledBorder
+import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import java.awt.event.KeyEvent
 
 /**
  * Callbacks for streaming/non-streaming response dialogs.
@@ -30,13 +37,15 @@ data class StreamingDialogCallbacks(
     val append: (String) -> Unit,
     val setFailed: (String) -> Unit,
     val setContent: (String) -> Unit,
-    val getContent: () -> String
+    val getContent: () -> String,
+    val setPromptSent: (systemPrompt: String, userMessage: String) -> Unit = { _, _ -> }
 )
 
 /**
  * Modal dialog to display Ollama response or error.
  * Includes Retry button for error state.
  * Supports streaming mode for real-time token display.
+ * Optional Reply/Follow-up when onFollowUp is provided.
  */
 class OllamaResponseDialog(
     parent: Frame?,
@@ -47,17 +56,39 @@ class OllamaResponseDialog(
     modal: Boolean = true,
     private val montoyaApi: MontoyaApi? = null,
     private val stopRequested: AtomicBoolean? = null,
-    private val onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
+    private val onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
+    private val onFollowUp: ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
 ) : JDialog(parent, title, modal) {
 
-    private val textArea = JTextArea(content, 20, 60).apply {
+    private val textArea = MarkdownTextPane(20, 60).apply {
+        text = content
+    }
+
+    private val promptArea = JTextArea("", 20, 60).apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
         margin = Insets(8, 8, 8, 8)
     }
 
-    private val scrollPane = JScrollPane(textArea)
+    private val scrollPane = JScrollPane(textArea).apply {
+        border = CompoundBorder(
+            TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Response", TitledBorder.LEADING, TitledBorder.TOP),
+            EmptyBorder(0, 0, 0, 0)
+        )
+    }
+
+    private val promptScrollPane = JScrollPane(promptArea).apply {
+        border = CompoundBorder(
+            TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "What was sent to the model", TitledBorder.LEADING, TitledBorder.TOP),
+            EmptyBorder(0, 0, 0, 0)
+        )
+    }
+
+    private val tabbedPane = JTabbedPane().apply {
+        addTab("Response", scrollPane)
+        addTab("Prompt sent", promptScrollPane)
+    }
     private val sendToRepeaterButton = montoyaApi?.let {
         JButton("Send to Repeater").apply {
             toolTipText = "Send detected HTTP request(s) to Repeater"
@@ -118,7 +149,7 @@ class OllamaResponseDialog(
 
     init {
         layout = BorderLayout()
-        add(scrollPane, BorderLayout.CENTER)
+        add(tabbedPane, BorderLayout.CENTER)
 
         val buttonPanel = JPanel(GridBagLayout()).apply {
             border = EmptyBorder(UiConstants.PANEL_PADDING)
@@ -189,8 +220,47 @@ class OllamaResponseDialog(
         closeButton.addActionListener { dispose() }
         buttonPanel.add(closeButton, gbc)
 
-        add(buttonPanel, BorderLayout.SOUTH)
-        preferredSize = Dimension(600, 400)
+        val southPanel = JPanel(BorderLayout())
+        southPanel.add(buttonPanel, BorderLayout.CENTER)
+        if (onFollowUp != null) {
+            val replyPanel = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 4)).apply {
+                border = EmptyBorder(4, 0, 0, 0)
+            }
+            val replyArea = JTextArea(2, 40).apply {
+                lineWrap = true
+                wrapStyleWord = true
+                margin = Insets(4, 6, 4, 6)
+                preferredSize = Dimension(400, 44)
+                minimumSize = Dimension(200, 44)
+                maximumSize = Dimension(600, 120)
+                toolTipText = "Type or paste follow-up (code, long text). Ctrl+Enter to send."
+            }
+            val replyButton = JButton("Reply").apply { toolTipText = "Send follow-up to Ollama" }
+            replyArea.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "reply"
+            )
+            replyArea.actionMap.put("reply", object : javax.swing.AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                    replyButton.doClick()
+                }
+            })
+            replyButton.addActionListener {
+                val followUp = replyArea.text.trim()
+                if (followUp.isBlank()) return@addActionListener
+                replyArea.text = ""
+                replyButton.isEnabled = false
+                onFollowUp?.invoke(followUp, getContent(), { chunk -> append(chunk); replyButton.isEnabled = true }, { err -> append("\n\n--- Error ---\n$err"); replyButton.isEnabled = true })
+            }
+            replyPanel.add(JLabel("Follow-up:"))
+            replyPanel.add(JScrollPane(replyArea).apply {
+                border = CompoundBorder(EtchedBorder(EtchedBorder.LOWERED), EmptyBorder(2, 2, 2, 2))
+            })
+            replyPanel.add(replyButton)
+            southPanel.add(replyPanel, BorderLayout.SOUTH)
+        }
+        add(southPanel, BorderLayout.SOUTH)
+        preferredSize = Dimension(720, 560)
+        minimumSize = Dimension(580, 480)
         pack()
         setLocationRelativeTo(parent)
     }
@@ -275,6 +345,23 @@ class OllamaResponseDialog(
         }
     }
 
+    /**
+     * Set the prompt that was sent to the model (for transparency). Shown in "Prompt sent" tab.
+     */
+    fun setPromptSent(systemPrompt: String, userMessage: String) {
+        SwingUtilities.invokeLater {
+            promptArea.text = buildString {
+                if (systemPrompt.isNotBlank()) {
+                    append("--- System prompt ---\n")
+                    append(systemPrompt)
+                    append("\n\n")
+                }
+                append("--- User message ---\n")
+                append(userMessage)
+            }
+        }
+    }
+
     private fun showCopiedFeedback(button: JButton) {
         val orig = button.text
         button.text = "Copied!"
@@ -305,6 +392,7 @@ class OllamaResponseDialog(
          * Returns callbacks for append, setFailed, setContent, and getContent.
          * When montoyaApi is provided, adds Send to Repeater/Intruder buttons for Explore issue.
          * When stopRequested is provided, adds Stop button; caller should check stopRequested.get() each iteration.
+         * When onFollowUp is provided, adds Follow-up input + Reply button for multi-turn conversation.
          */
         fun showStreaming(
             parent: Frame?,
@@ -312,7 +400,8 @@ class OllamaResponseDialog(
             retry: ((String?) -> Unit)? = null,
             montoyaApi: MontoyaApi? = null,
             stopRequested: AtomicBoolean? = null,
-            onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
+            onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
+            onFollowUp: ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)? = null
         ): StreamingDialogCallbacks {
             val dialog = OllamaResponseDialog(
                 parent, title, "",
@@ -321,7 +410,8 @@ class OllamaResponseDialog(
                 modal = false,
                 montoyaApi = montoyaApi,
                 stopRequested = stopRequested,
-                onRefineWithChain = onRefineWithChain
+                onRefineWithChain = onRefineWithChain,
+                onFollowUp = onFollowUp
             )
             SwingUtilities.invokeLater {
                 dialog.isVisible = true
@@ -330,7 +420,8 @@ class OllamaResponseDialog(
                 append = { chunk -> dialog.append(chunk) },
                 setFailed = { msg -> dialog.setFailed(msg) },
                 setContent = { text -> dialog.setContent(text) },
-                getContent = { dialog.getContent() }
+                getContent = { dialog.getContent() },
+                setPromptSent = { sys, user -> dialog.setPromptSent(sys, user) }
             )
         }
     }

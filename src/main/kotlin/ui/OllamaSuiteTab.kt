@@ -21,13 +21,18 @@ import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.JScrollPane
+import javax.swing.JSeparator
 import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
+import ui.MarkdownTextPane
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
+import javax.swing.border.TitledBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.CompoundBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import java.awt.event.KeyEvent
@@ -57,12 +62,7 @@ class OllamaSuiteTab(
     private val askButton = JButton("Ask Ollama").apply {
         toolTipText = "Send prompt to Ollama"
     }
-    private val responseArea = JTextArea(20, 60).apply {
-        isEditable = false
-        lineWrap = true
-        wrapStyleWord = true
-        margin = Insets(8, 8, 8, 8)
-    }
+    private val responseArea = MarkdownTextPane(20, 60)
     private val sendToRepeaterButton = JButton("Send to Repeater").apply {
         toolTipText = "Send detected HTTP request(s) from response to Repeater"
         isEnabled = false
@@ -150,16 +150,23 @@ class OllamaSuiteTab(
 
     init {
         border = EmptyBorder(UiConstants.PANEL_PADDING)
+        val chatInputPanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Your message — type here (Ctrl+Enter to send)", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }
+        chatInputPanel.add(JScrollPane(promptArea).apply {
+            preferredSize = Dimension(0, 120)
+            minimumSize = Dimension(100, 80)
+        }, BorderLayout.CENTER)
         val topPanel = JPanel(BorderLayout()).apply {
             border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
         }
-        topPanel.add(JLabel("Ask Ollama (general queries). Use Repeater Ollama tab or right-click for context-aware analysis.").apply {
-            border = EmptyBorder(0, 0, 6, 0)
+        topPanel.add(JLabel("Ask Ollama — general queries. Use Repeater tab or right-click for context-aware analysis.").apply {
+            border = EmptyBorder(0, 0, 8, 0)
         }, BorderLayout.NORTH)
-        topPanel.add(JScrollPane(promptArea).apply {
-            preferredSize = Dimension(0, 100)
-            border = EmptyBorder(0, 0, 0, 0)
-        }, BorderLayout.CENTER)
+        topPanel.add(chatInputPanel, BorderLayout.CENTER)
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
@@ -237,7 +244,10 @@ class OllamaSuiteTab(
         topPanel.add(toolbar, BorderLayout.SOUTH)
 
         val responsePanel = JPanel(BorderLayout()).apply {
-            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Response", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(UiConstants.TOOLBAR_GAP, 6, 6, 6)
+            )
         }
         val responseTop = JPanel(BorderLayout())
         responseTop.add(loadingPanel, BorderLayout.NORTH)
@@ -251,7 +261,7 @@ class OllamaSuiteTab(
         responseToolbar.add(copyReportButton)
         responseTop.add(responseToolbar, BorderLayout.CENTER)
         responsePanel.add(responseTop, BorderLayout.NORTH)
-        responsePanel.add(JScrollPane(responseArea), BorderLayout.CENTER)
+        responsePanel.add(JScrollPane(responseArea).apply { minimumSize = Dimension(100, 150) }, BorderLayout.CENTER)
 
         val chatPanel = JPanel(BorderLayout())
         chatPanel.add(JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, responsePanel).apply {
@@ -259,7 +269,10 @@ class OllamaSuiteTab(
         }, BorderLayout.CENTER)
 
         val tasksPanel = JPanel(BorderLayout()).apply {
-            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Recent tasks", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
         }
         tasksPanel.add(tasksHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         val tasksSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(taskList), JScrollPane(taskDetailArea))
@@ -285,7 +298,10 @@ class OllamaSuiteTab(
         }
 
         val suggestionsPanel = JPanel(BorderLayout()).apply {
-            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Proactive suggestions", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
         }
         suggestionsPanel.add(suggestionsHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         val suggestionsSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(suggestionList), JScrollPane(suggestionDetailArea))
@@ -336,7 +352,10 @@ class OllamaSuiteTab(
         }
 
         val analyzedPanel = JPanel(BorderLayout()).apply {
-            border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Recently analyzed", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
         }
         analyzedPanel.add(analyzedHeaderLabel.apply { border = EmptyBorder(0, 0, 6, 0) }, BorderLayout.NORTH)
         analyzedPanel.add(JScrollPane(analyzedList), BorderLayout.CENTER)
@@ -344,26 +363,57 @@ class OllamaSuiteTab(
         val comparePanel = JPanel(BorderLayout()).apply {
             border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
         }
-        val compareTop = JPanel(BorderLayout()).apply {
-            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        // Section 1: Prompt only — clear "type here" area, nothing else
+        val comparePromptSection = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Your prompt — type here", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(8, 8, 8, 8)
+            )
         }
-        compareTop.add(JLabel("Select 2+ models, enter prompt, then Compare. Responses shown side-by-side.").apply {
-            border = EmptyBorder(0, 0, 6, 0)
-        }, BorderLayout.NORTH)
-        compareTop.add(JScrollPane(comparePromptArea).apply { preferredSize = Dimension(0, 80) }, BorderLayout.CENTER)
+        comparePromptSection.add(JScrollPane(comparePromptArea).apply {
+            preferredSize = Dimension(0, 110)
+            minimumSize = Dimension(100, 90)
+        }, BorderLayout.CENTER)
+        // Section 2: Models & actions — separate from typing area
+        val compareConfigSection = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Select models & compare", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(8, 8, 8, 8)
+            )
+        }
         val compareToolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         compareToolbar.add(JLabel("Models:"))
-        compareToolbar.add(JScrollPane(compareModelList).apply { preferredSize = Dimension(200, 80) })
+        compareToolbar.add(JScrollPane(compareModelList).apply {
+            preferredSize = Dimension(220, 85)
+            minimumSize = Dimension(180, 70)
+            border = CompoundBorder(EtchedBorder(EtchedBorder.LOWERED), EmptyBorder(2, 2, 2, 2))
+        })
         compareToolbar.add(compareButton)
         compareToolbar.add(compareExportButton)
         compareToolbar.add(JButton("Refresh").apply {
             addActionListener { refreshCompareModelList() }
         })
-        compareTop.add(compareToolbar, BorderLayout.SOUTH)
-        comparePanel.add(compareTop, BorderLayout.NORTH)
-        val compareResultPanel = JPanel(BorderLayout())
+        compareConfigSection.add(compareToolbar, BorderLayout.CENTER)
+        // Stack: prompt section (type here) | visual break | config section (models & buttons)
+        val compareTopStack = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(0, 0, 8, 0)
+        }
+        compareTopStack.add(comparePromptSection, BorderLayout.NORTH)
+        val compareDivider = JPanel(BorderLayout()).apply {
+            border = EmptyBorder(12, 0, 12, 0)
+            add(JSeparator(JSeparator.HORIZONTAL), BorderLayout.CENTER)
+        }
+        compareTopStack.add(compareDivider, BorderLayout.CENTER)
+        compareTopStack.add(compareConfigSection, BorderLayout.SOUTH)
+        comparePanel.add(compareTopStack, BorderLayout.NORTH)
+        val compareResultPanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Model responses — select 2+ models, enter prompt above, click Compare", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }
         compareResultPanel.add(compareLoadingPanel, BorderLayout.NORTH)
-        compareResultPanel.add(compareResultTabs, BorderLayout.CENTER)
+        compareResultPanel.add(compareResultTabs.apply { minimumSize = Dimension(200, 150) }, BorderLayout.CENTER)
         comparePanel.add(compareResultPanel, BorderLayout.CENTER)
 
         tabbedPane = JTabbedPane()
@@ -671,11 +721,7 @@ class OllamaSuiteTab(
             ollamaService.chatAsync(model, systemPrompt, userMessage, numCtx)
                 .thenAccept { result ->
                     SwingUtilities.invokeLater {
-                        val textArea = JTextArea(15, 50).apply {
-                            isEditable = false
-                            lineWrap = true
-                            wrapStyleWord = true
-                        }
+                        val textArea = MarkdownTextPane(15, 50)
                         result.fold(
                             onSuccess = { cr ->
                                 val usage = if (cr.promptTokens != null && cr.evalTokens != null) "\n\n---\nTokens: ${cr.promptTokens} in, ${cr.evalTokens} out" else ""
@@ -693,8 +739,20 @@ class OllamaSuiteTab(
                 setCompareLoading(false)
                 compareButton.isEnabled = true
                 if (models.size == 2) {
-                    val textA = (compareResultTabs.getComponentAt(0) as? JScrollPane)?.viewport?.view?.let { (it as? JTextArea)?.text ?: "" } ?: ""
-                    val textB = (compareResultTabs.getComponentAt(1) as? JScrollPane)?.viewport?.view?.let { (it as? JTextArea)?.text ?: "" } ?: ""
+                    val textA = (compareResultTabs.getComponentAt(0) as? JScrollPane)?.viewport?.view?.let { v ->
+                        when (v) {
+                            is JTextArea -> v.text
+                            is MarkdownTextPane -> v.text
+                            else -> ""
+                        }
+                    } ?: ""
+                    val textB = (compareResultTabs.getComponentAt(1) as? JScrollPane)?.viewport?.view?.let { v ->
+                        when (v) {
+                            is JTextArea -> v.text
+                            is MarkdownTextPane -> v.text
+                            else -> ""
+                        }
+                    } ?: ""
                     val diffText = SimpleDiff.diff(textA, textB, models[0], models[1])
                     val diffArea = JTextArea(15, 50).apply {
                         isEditable = false
@@ -727,7 +785,11 @@ class OllamaSuiteTab(
             val modelName = compareResultTabs.getTitleAt(i)
             val comp = compareResultTabs.getComponentAt(i)
             val text = (comp as? JScrollPane)?.viewport?.view?.let { v ->
-                (v as? JTextArea)?.text ?: ""
+                when (v) {
+                    is JTextArea -> v.text
+                    is MarkdownTextPane -> v.text
+                    else -> ""
+                }
             } ?: ""
             sb.append("## $modelName\n\n")
             sb.append(text.trim())

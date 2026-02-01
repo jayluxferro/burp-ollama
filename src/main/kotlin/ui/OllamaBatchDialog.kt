@@ -19,7 +19,11 @@ import javax.swing.JProgressBar
 import javax.swing.JScrollPane
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
+import ui.MarkdownTextPane
+import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.TitledBorder
 import javax.swing.SwingUtilities
 
 /**
@@ -50,7 +54,12 @@ class OllamaBatchDialog(
             border = EmptyBorder(UiConstants.PANEL_PADDING)
         }
         mainPanel.add(loadingPanel, BorderLayout.NORTH)
-        mainPanel.add(JScrollPane(tabbedPane), BorderLayout.CENTER)
+        mainPanel.add(JScrollPane(tabbedPane).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Results — one tab per item", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }, BorderLayout.CENTER)
         val buttonPanel = JPanel(GridBagLayout()).apply {
             border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
         }
@@ -81,12 +90,7 @@ class OllamaBatchDialog(
             ollamaService.chatAsync(m, systemPrompt, truncated, numCtx)
                 .thenAccept { result ->
                     SwingUtilities.invokeLater {
-                        val textArea = JTextArea(15, 60).apply {
-                            isEditable = false
-                            lineWrap = true
-                            wrapStyleWord = true
-                            margin = Insets(8, 8, 8, 8)
-                        }
+                        val textArea = MarkdownTextPane(15, 60)
                         result.fold(
                             onSuccess = { cr ->
                                 val usage = if (cr.promptTokens != null && cr.evalTokens != null) "\n\n---\nTokens: ${cr.promptTokens} in, ${cr.evalTokens} out" else ""
@@ -112,7 +116,13 @@ class OllamaBatchDialog(
         for (i in 0 until tabbedPane.tabCount) {
             val label = tabbedPane.getTitleAt(i)
             val comp = tabbedPane.getComponentAt(i)
-            val text = (comp as? JScrollPane)?.viewport?.view?.let { (it as? JTextArea)?.text ?: "" } ?: ""
+            val text = (comp as? JScrollPane)?.viewport?.view?.let { v ->
+                when (v) {
+                    is JTextArea -> v.text
+                    is MarkdownTextPane -> v.text
+                    else -> ""
+                }
+            } ?: ""
             sb.append("## $label\n\n")
             sb.append(text.trim())
             sb.append("\n\n---\n\n")

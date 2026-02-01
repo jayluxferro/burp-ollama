@@ -20,8 +20,12 @@ import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
+import ui.MarkdownTextPane
 import javax.swing.KeyStroke
+import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.TitledBorder
 import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -52,12 +56,7 @@ class OllamaQuickPromptDialog(
     private val askButton = JButton("Ask").apply {
         toolTipText = "Send to Ollama"
     }
-    private val responseArea = JTextArea(12, 50).apply {
-        isEditable = false
-        lineWrap = true
-        wrapStyleWord = true
-        margin = Insets(8, 8, 8, 8)
-    }
+    private val responseArea = MarkdownTextPane(12, 50)
     private val copyButton = JButton("Copy").apply {
         toolTipText = "Copy response to clipboard"
         isEnabled = false
@@ -73,13 +72,23 @@ class OllamaQuickPromptDialog(
         defaultCloseOperation = DISPOSE_ON_CLOSE
         (contentPane as? javax.swing.JComponent)?.border = EmptyBorder(UiConstants.PANEL_PADDING)
 
+        val inputPanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Your question — type here (Ctrl+Enter to send)", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }
+        inputPanel.add(JScrollPane(promptArea).apply {
+            preferredSize = Dimension(0, 90)
+            minimumSize = Dimension(100, 60)
+        }, BorderLayout.CENTER)
         val topPanel = JPanel(BorderLayout()).apply {
             border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
         }
         topPanel.add(JLabel("Quick one-off query (no conversation history):").apply {
-            border = EmptyBorder(0, 0, 6, 0)
+            border = EmptyBorder(0, 0, 8, 0)
         }, BorderLayout.NORTH)
-        topPanel.add(JScrollPane(promptArea).apply { preferredSize = Dimension(0, 70) }, BorderLayout.CENTER)
+        topPanel.add(inputPanel, BorderLayout.CENTER)
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
@@ -87,9 +96,14 @@ class OllamaQuickPromptDialog(
         toolbar.add(askButton)
         topPanel.add(toolbar, BorderLayout.SOUTH)
 
-        val responsePanel = JPanel(BorderLayout())
+        val responsePanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Response", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }
         responsePanel.add(loadingPanel, BorderLayout.NORTH)
-        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         responseToolbar.add(copyButton)
         responsePanel.add(responseToolbar, BorderLayout.CENTER)
         responsePanel.add(JScrollPane(responseArea), BorderLayout.CENTER)

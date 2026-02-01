@@ -5,6 +5,7 @@ import ollama.OllamaModelCache
 import ollama.OllamaService
 import prompts.SecurityPrompts
 import java.awt.BorderLayout
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -45,19 +46,19 @@ class OllamaSettingsPanel(
         isEditable = true
         addItem(config.model)
     }
-    private val modelRepeaterField = JTextField(config.modelRepeater, 30).apply {
-        toolTipText = "Optional. Leave blank to use default model in Repeater Ollama tab."
+    private val modelRepeaterCombo = createModelDropdown(config.modelRepeater).apply {
+        toolTipText = "Optional. Use default to use default model in Repeater Ollama tab."
     }
-    private val modelSuiteField = JTextField(config.modelSuite, 30).apply {
-        toolTipText = "Optional. Leave blank to use default model in Ollama Suite tab."
+    private val modelSuiteCombo = createModelDropdown(config.modelSuite).apply {
+        toolTipText = "Optional. Use default to use default model in Ollama Suite tab."
     }
-    private val modelDecoderField = JTextField(config.modelDecoder, 30).apply {
-        toolTipText = "Optional. Leave blank to use default model in Decoder (when Ollama tab is shown)."
+    private val modelDecoderCombo = createModelDropdown(config.modelDecoder).apply {
+        toolTipText = "Optional. Use default to use default model in Decoder (when Ollama tab is shown)."
     }
-    private val chainModelAField = JTextField(config.chainModelA, 25).apply {
-        toolTipText = "First model in chain (generates initial response). Leave blank to disable chaining."
+    private val chainModelACombo = createModelDropdown(config.chainModelA).apply {
+        toolTipText = "First model in chain (generates initial response). Use default to disable chaining."
     }
-    private val chainModelBField = JTextField(config.chainModelB, 25).apply {
+    private val chainModelBCombo = createModelDropdown(config.chainModelB).apply {
         toolTipText = "Second model in chain (refines output of model A)."
     }
     private val chainRefinePromptField = JTextArea(config.chainRefinePrompt, 2, 50).apply {
@@ -69,10 +70,10 @@ class OllamaSettingsPanel(
         selectedIndex = config.chainActivePreset
         toolTipText = "Active chain preset"
     }
-    private val chain2ModelAField = JTextField(config.chain2ModelA, 25).apply {
+    private val chain2ModelACombo = createModelDropdown(config.chain2ModelA).apply {
         toolTipText = "Chain 2: first model"
     }
-    private val chain2ModelBField = JTextField(config.chain2ModelB, 25).apply {
+    private val chain2ModelBCombo = createModelDropdown(config.chain2ModelB).apply {
         toolTipText = "Chain 2: second model"
     }
     private val chain2RefinePromptField = JTextArea(config.chain2RefinePrompt, 2, 50).apply {
@@ -169,6 +170,75 @@ class OllamaSettingsPanel(
 
     private val formPanel = JPanel(GridBagLayout())
 
+    companion object {
+        private const val USE_DEFAULT = "(use default)"
+    }
+
+    private fun createModelDropdown(currentValue: String): JComboBox<String> {
+        val models = OllamaModelCache.models
+        val extra = currentValue.trim().takeIf { it.isNotBlank() && !models.contains(it) }?.let { listOf(it) } ?: emptyList()
+        val items = listOf(USE_DEFAULT) + models + extra
+        val combo = JComboBox(DefaultComboBoxModel(items.toTypedArray()))
+        combo.preferredSize = Dimension(220, 24)
+        val toSelect = currentValue.trim().ifBlank { USE_DEFAULT }
+        combo.selectedItem = if (items.contains(toSelect)) toSelect else USE_DEFAULT
+        return combo
+    }
+
+    private fun refreshAllModelDropdowns() {
+        val models = OllamaModelCache.models
+        listOf(modelRepeaterCombo, modelSuiteCombo, modelDecoderCombo, chainModelACombo, chainModelBCombo, chain2ModelACombo, chain2ModelBCombo).forEach { combo ->
+            val current = (combo.selectedItem?.toString()?.trim()?.takeIf { it != USE_DEFAULT } ?: USE_DEFAULT)
+            val extra = if (current != USE_DEFAULT && current.isNotBlank() && !models.contains(current)) listOf(current) else emptyList()
+            val items = listOf(USE_DEFAULT) + models + extra
+            combo.model = DefaultComboBoxModel(items.toTypedArray())
+            combo.selectedItem = if (current == USE_DEFAULT || items.contains(current)) current else USE_DEFAULT
+        }
+    }
+
+    private fun createPromptEditPanel(valueField: JTextArea, label: String, tooltip: String, defaultText: String): JPanel {
+        val previewLabel = JLabel().apply {
+            font = font.deriveFont(java.awt.Font.ITALIC, font.size - 1f)
+        }
+        fun updatePreview() {
+            val t = valueField.text.trim().ifBlank { defaultText }
+            previewLabel.text = if (t.length > 60) t.take(60) + "…" else t.ifBlank { "(default)" }
+            previewLabel.toolTipText = t.ifBlank { defaultText }
+        }
+        val editButton = JButton("✎ Edit").apply {
+            toolTipText = tooltip
+            addActionListener {
+                val editArea = JTextArea(valueField.text, 6, 50).apply {
+                    lineWrap = true
+                    wrapStyleWord = true
+                    margin = Insets(8, 8, 8, 8)
+                }
+                val dialogPanel = JPanel(BorderLayout()).apply {
+                    add(JLabel("$label (click OK to save):"), BorderLayout.NORTH)
+                    add(JScrollPane(editArea).apply { preferredSize = java.awt.Dimension(450, 120) }, BorderLayout.CENTER)
+                }
+                val r = JOptionPane.showConfirmDialog(
+                    null,
+                    dialogPanel,
+                    "Edit: $label",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE
+                )
+                if (r == JOptionPane.OK_OPTION) {
+                    valueField.text = editArea.text.trim().ifBlank { defaultText }
+                    updatePreview()
+                }
+            }
+        }
+        updatePreview()
+        return JPanel(BorderLayout()).apply {
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                add(previewLabel)
+                add(editButton)
+            }, BorderLayout.CENTER)
+        }
+    }
+
     init {
         val gbc = GridBagConstraints().apply {
             fill = GridBagConstraints.HORIZONTAL
@@ -201,37 +271,37 @@ class OllamaSettingsPanel(
 
         formPanel.add(JLabel("Model override (Repeater):"), gbc)
         gbc.gridx = 1
-        formPanel.add(modelRepeaterField, gbc)
+        formPanel.add(modelRepeaterCombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Model override (Suite tab):"), gbc)
         gbc.gridx = 1
-        formPanel.add(modelSuiteField, gbc)
+        formPanel.add(modelSuiteCombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Model override (Decoder):"), gbc)
         gbc.gridx = 1
-        formPanel.add(modelDecoderField, gbc)
+        formPanel.add(modelDecoderCombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Chain model A:"), gbc)
         gbc.gridx = 1
-        formPanel.add(chainModelAField, gbc)
+        formPanel.add(chainModelACombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Chain model B:"), gbc)
         gbc.gridx = 1
-        formPanel.add(chainModelBField, gbc)
+        formPanel.add(chainModelBCombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Chain refine prompt:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(chainRefinePromptField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(chainRefinePromptField, "Chain refine prompt", "System prompt for the refiner model (model B)", SecurityPrompts.DEFAULT_CHAIN_REFINE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -243,19 +313,19 @@ class OllamaSettingsPanel(
 
         formPanel.add(JLabel("Chain 2 model A:"), gbc)
         gbc.gridx = 1
-        formPanel.add(chain2ModelAField, gbc)
+        formPanel.add(chain2ModelACombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Chain 2 model B:"), gbc)
         gbc.gridx = 1
-        formPanel.add(chain2ModelBField, gbc)
+        formPanel.add(chain2ModelBCombo, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Chain 2 refine prompt:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(chain2RefinePromptField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(chain2RefinePromptField, "Chain 2 refine prompt", "Chain 2: refine prompt", SecurityPrompts.DEFAULT_CHAIN_REFINE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -291,9 +361,7 @@ class OllamaSettingsPanel(
 
         formPanel.add(JLabel("System prompt (explain):"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(systemPromptField).apply {
-            preferredSize = java.awt.Dimension(400, 80)
-        }, gbc)
+        formPanel.add(createPromptEditPanel(systemPromptField, "System prompt (explain)", "Default prompt for Explain selection", SecurityPrompts.DEFAULT_EXPLAIN_SELECTION), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -315,7 +383,7 @@ class OllamaSettingsPanel(
                 val nameField = JTextField(20)
                 val promptField = JTextArea(3, 40).apply { lineWrap = true; wrapStyleWord = true }
                 val r = JOptionPane.showConfirmDialog(
-                    this@OllamaSettingsPanel,
+                    null,
                     JPanel(GridBagLayout()).apply {
                         val g = GridBagConstraints()
                         g.gridx = 0; g.gridy = 0; add(JLabel("Name:"), g)
@@ -417,61 +485,61 @@ class OllamaSettingsPanel(
 
         formPanel.add(JLabel("Explain headers:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptExplainHeadersField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(promptExplainHeadersField, "Explain headers", "Prompt for Explain headers", SecurityPrompts.DEFAULT_EXPLAIN_HEADERS), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Analyze (vulnerability):"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptAnalyzeField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(promptAnalyzeField, "Analyze (vulnerability)", "Prompt for vulnerability analysis", SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Validate false positive:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptValidateFalsePositiveField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        formPanel.add(createPromptEditPanel(promptValidateFalsePositiveField, "Validate false positive", "Prompt for false positive validation", SecurityPrompts.DEFAULT_VALIDATE_FALSE_POSITIVE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Decipher code:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptDecipherField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(promptDecipherField, "Decipher code", "Prompt for code analysis", SecurityPrompts.DEFAULT_DECIPHER_CODE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Generate login:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptGenerateLoginField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        formPanel.add(createPromptEditPanel(promptGenerateLoginField, "Generate login", "Prompt for login sequence generation", SecurityPrompts.DEFAULT_GENERATE_LOGIN_SEQUENCE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Intruder suggest payloads:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptIntruderPayloadsField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(promptIntruderPayloadsField, "Intruder suggest payloads", "Prompt for Intruder payload suggestions", SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_PAYLOADS), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Intruder suggest attack type:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptIntruderAttackTypeField).apply { preferredSize = java.awt.Dimension(400, 45) }, gbc)
+        formPanel.add(createPromptEditPanel(promptIntruderAttackTypeField, "Intruder suggest attack type", "Prompt for Intruder attack type", SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_ATTACK_TYPE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Intruder suggest OOB payloads:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptIntruderOobPayloadsField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        formPanel.add(createPromptEditPanel(promptIntruderOobPayloadsField, "Intruder suggest OOB payloads", "Prompt for OOB payload suggestions", SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_OOB_PAYLOADS), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Explore issue:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptExploreIssueField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        formPanel.add(createPromptEditPanel(promptExploreIssueField, "Explore issue", "Prompt for issue exploration", SecurityPrompts.DEFAULT_EXPLORE_ISSUE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
         formPanel.add(JLabel("Autonomous Explore:"), gbc)
         gbc.gridx = 1
-        formPanel.add(JScrollPane(promptAutonomousExploreField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        formPanel.add(createPromptEditPanel(promptAutonomousExploreField, "Autonomous Explore", "Prompt for autonomous exploration", SecurityPrompts.DEFAULT_AUTONOMOUS_EXPLORE), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -578,6 +646,7 @@ class OllamaSettingsPanel(
         }
         modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
         modelCombo.selectedItem = current
+        refreshAllModelDropdowns()
     }
 
     private fun refreshModelComboAsync() {
@@ -590,18 +659,23 @@ class OllamaSettingsPanel(
         }
     }
 
+    private fun modelFromCombo(combo: JComboBox<String>): String {
+        val v = (combo.editor?.item ?: combo.selectedItem)?.toString()?.trim() ?: ""
+        return if (v == USE_DEFAULT || v.isBlank()) "" else v
+    }
+
     private fun saveToConfig() {
         config.baseUrl = baseUrlField.text.trim().ifBlank { OllamaService.DEFAULT_BASE_URL }
         config.model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: "").trim().ifBlank { OllamaConfig.DEFAULT_MODEL }
-        config.modelRepeater = modelRepeaterField.text.trim()
-        config.modelSuite = modelSuiteField.text.trim()
-        config.modelDecoder = modelDecoderField.text.trim()
-        config.chainModelA = chainModelAField.text.trim()
-        config.chainModelB = chainModelBField.text.trim()
+        config.modelRepeater = modelFromCombo(modelRepeaterCombo)
+        config.modelSuite = modelFromCombo(modelSuiteCombo)
+        config.modelDecoder = modelFromCombo(modelDecoderCombo)
+        config.chainModelA = modelFromCombo(chainModelACombo)
+        config.chainModelB = modelFromCombo(chainModelBCombo)
         config.chainRefinePrompt = chainRefinePromptField.text.ifBlank { SecurityPrompts.DEFAULT_CHAIN_REFINE }
         config.chainActivePreset = chainPresetCombo.selectedIndex
-        config.chain2ModelA = chain2ModelAField.text.trim()
-        config.chain2ModelB = chain2ModelBField.text.trim()
+        config.chain2ModelA = modelFromCombo(chain2ModelACombo)
+        config.chain2ModelB = modelFromCombo(chain2ModelBCombo)
         config.chain2RefinePrompt = chain2RefinePromptField.text.ifBlank { SecurityPrompts.DEFAULT_CHAIN_REFINE }
         config.timeoutSeconds = timeoutField.text.toIntOrNull() ?: OllamaService.DEFAULT_TIMEOUT
         config.numCtx = numCtxField.text.toIntOrNull() ?: OllamaConfig.DEFAULT_NUM_CTX
@@ -634,15 +708,26 @@ class OllamaSettingsPanel(
             modelCombo.addItem(config.model)
         }
         modelCombo.selectedItem = config.model
-        modelRepeaterField.text = config.modelRepeater
-        modelSuiteField.text = config.modelSuite
-        modelDecoderField.text = config.modelDecoder
-        chainModelAField.text = config.chainModelA
-        chainModelBField.text = config.chainModelB
+        refreshAllModelDropdowns()
+        fun setComboSelection(combo: JComboBox<String>, value: String) {
+            val v = value.trim().ifBlank { USE_DEFAULT }
+            if (v != USE_DEFAULT) {
+                val model = combo.model as DefaultComboBoxModel<String>
+                if ((0 until model.size).map { model.getElementAt(it) }.none { it == v }) {
+                    model.addElement(v)
+                }
+            }
+            combo.selectedItem = v
+        }
+        setComboSelection(modelRepeaterCombo, config.modelRepeater)
+        setComboSelection(modelSuiteCombo, config.modelSuite)
+        setComboSelection(modelDecoderCombo, config.modelDecoder)
+        setComboSelection(chainModelACombo, config.chainModelA)
+        setComboSelection(chainModelBCombo, config.chainModelB)
         chainRefinePromptField.text = config.chainRefinePrompt
         chainPresetCombo.selectedIndex = config.chainActivePreset
-        chain2ModelAField.text = config.chain2ModelA
-        chain2ModelBField.text = config.chain2ModelB
+        setComboSelection(chain2ModelACombo, config.chain2ModelA)
+        setComboSelection(chain2ModelBCombo, config.chain2ModelB)
         chain2RefinePromptField.text = config.chain2RefinePrompt
         refreshCustomPromptsList()
         timeoutField.text = config.timeoutSeconds.toString()

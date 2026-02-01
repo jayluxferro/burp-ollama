@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Token usage stats** – Ollama API token counts (prompt + eval) shown in Quick prompt, Suite Chat, Compare tab, and batch analysis responses when available
 - **Collaborator OOB payload suggestions** – Intruder submenu "Suggest OOB payloads" generates Burp Collaborator payloads and asks AI to suggest injection payloads (SSRF, XXE, command injection, etc.) using them; requires Burp Professional with Collaborator enabled; customizable prompt in Settings
 - **UI polish** – Consistent padding, spacing, and alignment across all Ollama UI components (Suite tab, Settings, dialogs, Repeater/Decoder tab); shared UiConstants for cohesive look
+- **Section borders** – Titled borders (Your message, Response, Prompt, Model responses) on Chat, Compare, Tasks, Suggestions, Analyzed tabs; clear input/output areas; visible typing regions and results partitions
 - **Ask Ollama** – Context menu on selected text in Repeater, Proxy, Decoder
 - **Ollama tab** – Dedicated AI panel in HTTP request/response editors with conversation history
 - **Prompt templates** – Explain, Explain headers, Analyze JS, Find vulns
@@ -49,3 +50,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stop button** – Stop button in Autonomous Explore streaming dialog to interrupt long-running exploration
 - **Executive summary** – AI-generated summary (findings, impact, next steps) appended when Autonomous Explore completes
 - **Quick prompt dialog** – Compact non-modal dialog for one-off AI queries; accessible via Ollama menu or "Quick prompt" button in Suite tab
+- **Markdown code block styling** – AI response areas (Suite Chat, Repeater tab, Quick prompt, response dialogs, batch/compare results) render ``` code blocks with monospace font and gray background instead of raw markdown

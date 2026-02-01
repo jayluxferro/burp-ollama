@@ -1,7 +1,10 @@
 package ui
 
 import java.awt.Insets
+import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.TitledBorder
 
 /**
  * Shared UI constants for consistent padding, spacing, and alignment across all Ollama UI components.
@@ -41,4 +44,10 @@ object UiConstants {
 
     /** Large panel padding border */
     val largeBorder get() = EmptyBorder(PANEL_PADDING_LARGE)
+
+    /** Section border with title (for clear input/output areas) */
+    fun sectionBorder(title: String) = CompoundBorder(
+        TitledBorder(EtchedBorder(EtchedBorder.LOWERED), title, TitledBorder.LEADING, TitledBorder.TOP),
+        EmptyBorder(6, 6, 6, 6)
+    )
 }
