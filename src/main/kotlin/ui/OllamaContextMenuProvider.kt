@@ -28,8 +28,7 @@ class OllamaContextMenuProvider(
         event.messageEditorRequestResponse().ifPresent { messageEditor ->
             val text = getTextFromMessageEditor(messageEditor)
             if (text != null && text.isNotBlank()) {
-                val label = if (messageEditor.selectionOffsets().isPresent) "Ask Ollama about selection" else "Ask Ollama"
-                items.add(createMenuItem(label, text))
+                items.add(createPromptTemplateMenu(text, "Ask Ollama"))
             }
         }
 
@@ -40,10 +39,10 @@ class OllamaContextMenuProvider(
             val responseText = rr.response()?.toString()
             val subMenu = JMenu("Ask Ollama")
             if (requestText.isNotBlank()) {
-                subMenu.add(createMenuItem("About request", requestText))
+                subMenu.add(createPromptTemplateMenu(requestText, "About request"))
             }
             if (responseText != null && responseText.isNotBlank()) {
-                subMenu.add(createMenuItem("About response", responseText))
+                subMenu.add(createPromptTemplateMenu(responseText, "About response"))
             }
             if (subMenu.menuComponentCount > 0) {
                 items.add(subMenu)
@@ -53,12 +52,20 @@ class OllamaContextMenuProvider(
         return items
     }
 
-    private fun createMenuItem(label: String, text: String): JMenuItem {
+    private fun createPromptTemplateMenu(text: String, menuLabel: String): JMenu {
+        val menu = JMenu(menuLabel)
+        menu.add(createMenuItem("Explain", text, config.systemPromptExplain))
+        menu.add(createMenuItem("Explain headers", text, config.systemPromptExplainHeaders))
+        menu.add(createMenuItem("Analyze JS", text, config.systemPromptDecipher))
+        menu.add(createMenuItem("Find vulns", text, config.systemPromptAnalyze))
+        return menu
+    }
+
+    private fun createMenuItem(label: String, text: String, systemPrompt: String = config.systemPromptExplain): JMenuItem {
         val truncated = truncateForContext(text)
         return JMenuItem(label).apply {
             addActionListener {
                 config.applyTo(ollamaService)
-                val systemPrompt = config.systemPromptExplain
                 val model = config.model
                 val numCtx = config.numCtx
 

@@ -61,6 +61,11 @@ class OllamaConfigTest {
     }
 
     @Test
+    fun `systemPromptExplainHeaders returns default when not set`() {
+        assertEquals(SecurityPrompts.DEFAULT_EXPLAIN_HEADERS, config.systemPromptExplainHeaders)
+    }
+
+    @Test
     fun `applyTo updates OllamaService`() {
         val service = OllamaService()
         config.baseUrl = "http://test:9999"

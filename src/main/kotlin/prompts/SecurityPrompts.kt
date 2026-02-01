@@ -8,6 +8,9 @@ object SecurityPrompts {
     const val DEFAULT_EXPLAIN_SELECTION =
         "You are a web security expert. Explain the following in the context of HTTP/web security. Be concise and focus on security implications."
 
+    const val DEFAULT_EXPLAIN_HEADERS =
+        "You are a web security expert. Explain these HTTP headers and their security implications. Be concise."
+
     const val DEFAULT_ANALYZE_VULNERABILITY =
         "You are a penetration tester. Analyze this finding and suggest exploitation steps. Be concise."
 

@@ -63,4 +63,4 @@ Tests include:
 
 ## License
 
-See project license.
+MIT

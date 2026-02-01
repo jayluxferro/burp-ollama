@@ -1,6 +1,8 @@
 import burp.api.montoya.BurpExtension
 import burp.api.montoya.MontoyaApi
 import ui.OllamaContextMenuProvider
+import ui.OllamaHttpRequestEditorProvider
+import ui.OllamaHttpResponseEditorProvider
 import ui.OllamaResponseDialog
 import ui.OllamaSettingsPanel
 import ollama.OllamaConfig
@@ -52,8 +54,18 @@ class Extension : BurpExtension {
             showStreamingResponseDialog = showStreamingResponseDialog
         )
 
+        val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
+            OllamaResponseDialog.show(frame, title, content, retry)
+        }
+
         api.userInterface().registerSettingsPanel(settingsPanel)
         api.userInterface().registerContextMenuItemsProvider(contextMenuProvider)
+        api.userInterface().registerHttpRequestEditorProvider(
+            OllamaHttpRequestEditorProvider(config, ollamaService, showErrorDialog)
+        )
+        api.userInterface().registerHttpResponseEditorProvider(
+            OllamaHttpResponseEditorProvider(config, ollamaService, showErrorDialog)
+        )
         api.userInterface().applyThemeToComponent(settingsPanel)
 
         api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text.")

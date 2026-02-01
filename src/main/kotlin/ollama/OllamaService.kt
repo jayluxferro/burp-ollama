@@ -208,6 +208,112 @@ class OllamaService(
         }
     }
 
+    /**
+     * Send chat with full message list (for multi-turn conversation history).
+     */
+    fun chatWithMessages(
+        model: String,
+        messages: List<ChatMessage>,
+        numCtx: Int? = null
+    ): Result<String> {
+        if (messages.isEmpty()) return Result.failure(OllamaException("No messages provided"))
+        return try {
+            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val requestBody = ChatRequest(
+                model = model,
+                messages = messages,
+                stream = false,
+                options = options
+            )
+            val json = toJson(requestBody)
+            val req = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/api/chat"))
+                .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build()
+            val resp = client.send(req, HttpResponse.BodyHandlers.ofString())
+            if (resp.statusCode() !in 200..299) {
+                return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: ${resp.body()}"))
+            }
+            val chatResp = OllamaResponseParser.parseChatResponse(resp.body())
+            val content = chatResp.message?.content
+            when {
+                chatResp.error != null -> Result.failure(OllamaException(chatResp.error))
+                content != null -> Result.success(content)
+                else -> Result.failure(OllamaException("Empty response from Ollama"))
+            }
+        } catch (e: Exception) {
+            Result.failure(OllamaException("Chat failed: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Send streaming chat with full message list (for multi-turn conversation history).
+     */
+    fun chatStreamWithMessages(
+        model: String,
+        messages: List<ChatMessage>,
+        numCtx: Int? = null,
+        onChunk: (String) -> Unit
+    ): Result<Unit> {
+        if (messages.isEmpty()) return Result.failure(OllamaException("No messages provided"))
+        return try {
+            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val requestBody = ChatRequest(
+                model = model,
+                messages = messages,
+                stream = true,
+                options = options
+            )
+            val json = toJson(requestBody)
+            val req = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/api/chat"))
+                .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build()
+            val resp = client.send(req, HttpResponse.BodyHandlers.ofInputStream())
+            if (resp.statusCode() !in 200..299) {
+                val body = resp.body().reader().readText()
+                return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: $body"))
+            }
+            BufferedReader(InputStreamReader(resp.body())).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val trimmed = line!!.trim()
+                    if (trimmed.isEmpty()) continue
+                    val chatResp = OllamaResponseParser.parseChatResponse(trimmed)
+                    if (chatResp.error != null) {
+                        return Result.failure(OllamaException(chatResp.error))
+                    }
+                    val content = chatResp.message?.content
+                    if (!content.isNullOrEmpty()) {
+                        onChunk(content)
+                    }
+                }
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(OllamaException("Streaming chat failed: ${e.message}", e))
+        }
+    }
+
+    fun chatWithMessagesAsync(
+        model: String,
+        messages: List<ChatMessage>,
+        numCtx: Int? = null
+    ): CompletableFuture<Result<String>> =
+        CompletableFuture.supplyAsync { chatWithMessages(model, messages, numCtx) }
+
+    fun chatStreamWithMessagesAsync(
+        model: String,
+        messages: List<ChatMessage>,
+        numCtx: Int? = null,
+        onChunk: (String) -> Unit
+    ): CompletableFuture<Result<Unit>> =
+        CompletableFuture.supplyAsync { chatStreamWithMessages(model, messages, numCtx, onChunk) }
+
     private fun toJson(req: ChatRequest): String {
         val messagesJson = req.messages.joinToString(",") { msg ->
             """{"role":"${escapeJson(msg.role)}","content":"${escapeJson(msg.content)}"}"""

@@ -47,6 +47,12 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setString(key("systemPromptExplain"), value)
         }
 
+    var systemPromptExplainHeaders: String
+        get() = preferences.getString(key("systemPromptExplainHeaders")) ?: SecurityPrompts.DEFAULT_EXPLAIN_HEADERS
+        set(value) {
+            preferences.setString(key("systemPromptExplainHeaders"), value)
+        }
+
     var systemPromptAnalyze: String
         get() = preferences.getString(key("systemPromptAnalyze")) ?: SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY
         set(value) {
