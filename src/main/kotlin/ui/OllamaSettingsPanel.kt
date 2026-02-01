@@ -39,6 +39,15 @@ class OllamaSettingsPanel(
         isEditable = true
         addItem(config.model)
     }
+    private val modelRepeaterField = JTextField(config.modelRepeater, 30).apply {
+        toolTipText = "Optional. Leave blank to use default model in Repeater Ollama tab."
+    }
+    private val modelSuiteField = JTextField(config.modelSuite, 30).apply {
+        toolTipText = "Optional. Leave blank to use default model in Ollama Suite tab."
+    }
+    private val modelDecoderField = JTextField(config.modelDecoder, 30).apply {
+        toolTipText = "Optional. Leave blank to use default model in Decoder (when Ollama tab is shown)."
+    }
     private val timeoutField = JTextField(config.timeoutSeconds.toString(), 8)
     private val numCtxField = JTextField(config.numCtx.toString(), 8)
     private val streamingCheck = JCheckBox("Use streaming responses", config.streaming)
@@ -108,6 +117,14 @@ class OllamaSettingsPanel(
         lineWrap = true
         wrapStyleWord = true
     }
+    private val promptAutonomousExploreField = JTextArea(config.systemPromptAutonomousExplore, 3, 50).apply {
+        lineWrap = true
+        wrapStyleWord = true
+    }
+    private val autonomousMaxIterField = JTextField(config.autonomousExploreMaxIterations.toString(), 6)
+    private val autonomousDelayField = JTextField(config.autonomousExploreDelayMs.toString(), 6).apply {
+        toolTipText = "Delay between requests (ms). 0 = no delay."
+    }
 
     private val formPanel = JPanel(GridBagLayout())
 
@@ -125,7 +142,7 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
-        formPanel.add(JLabel("Model:"), gbc)
+        formPanel.add(JLabel("Model (default):"), gbc)
         gbc.gridx = 1
         val modelPanel = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0))
         modelPanel.add(modelCombo)
@@ -137,6 +154,24 @@ class OllamaSettingsPanel(
         }
         modelPanel.add(refreshModelsButton)
         formPanel.add(modelPanel, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Model override (Repeater):"), gbc)
+        gbc.gridx = 1
+        formPanel.add(modelRepeaterField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Model override (Suite tab):"), gbc)
+        gbc.gridx = 1
+        formPanel.add(modelSuiteField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Model override (Decoder):"), gbc)
+        gbc.gridx = 1
+        formPanel.add(modelDecoderField, gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -294,6 +329,24 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        formPanel.add(JLabel("Autonomous Explore:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(JScrollPane(promptAutonomousExploreField).apply { preferredSize = java.awt.Dimension(400, 55) }, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Autonomous max iterations:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(autonomousMaxIterField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Autonomous delay (ms):"), gbc)
+        gbc.gridx = 1
+        formPanel.add(autonomousDelayField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
         // Explicit Save button - no auto-save on focus lost
         saveButton.addActionListener {
             saveToConfig()
@@ -389,6 +442,9 @@ class OllamaSettingsPanel(
     private fun saveToConfig() {
         config.baseUrl = baseUrlField.text.trim().ifBlank { OllamaService.DEFAULT_BASE_URL }
         config.model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: "").trim().ifBlank { OllamaConfig.DEFAULT_MODEL }
+        config.modelRepeater = modelRepeaterField.text.trim()
+        config.modelSuite = modelSuiteField.text.trim()
+        config.modelDecoder = modelDecoderField.text.trim()
         config.timeoutSeconds = timeoutField.text.toIntOrNull() ?: OllamaService.DEFAULT_TIMEOUT
         config.numCtx = numCtxField.text.toIntOrNull() ?: OllamaConfig.DEFAULT_NUM_CTX
         config.streaming = streamingCheck.isSelected
@@ -403,6 +459,9 @@ class OllamaSettingsPanel(
         config.systemPromptIntruderPayloads = promptIntruderPayloadsField.text.ifBlank { SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_PAYLOADS }
         config.systemPromptIntruderAttackType = promptIntruderAttackTypeField.text.ifBlank { SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_ATTACK_TYPE }
         config.systemPromptExploreIssue = promptExploreIssueField.text.ifBlank { SecurityPrompts.DEFAULT_EXPLORE_ISSUE }
+        config.systemPromptAutonomousExplore = promptAutonomousExploreField.text.ifBlank { SecurityPrompts.DEFAULT_AUTONOMOUS_EXPLORE }
+        config.autonomousExploreMaxIterations = autonomousMaxIterField.text.toIntOrNull() ?: 5
+        config.autonomousExploreDelayMs = autonomousDelayField.text.toIntOrNull() ?: 500
         config.loginEnabled = loginEnabledCheck.isSelected
         config.loginBaseUrl = loginBaseUrlField.text.trim()
         config.loginRequestTemplate = loginRequestTemplateField.text
@@ -416,6 +475,9 @@ class OllamaSettingsPanel(
             modelCombo.addItem(config.model)
         }
         modelCombo.selectedItem = config.model
+        modelRepeaterField.text = config.modelRepeater
+        modelSuiteField.text = config.modelSuite
+        modelDecoderField.text = config.modelDecoder
         timeoutField.text = config.timeoutSeconds.toString()
         numCtxField.text = config.numCtx.toString()
         streamingCheck.isSelected = config.streaming
@@ -430,6 +492,9 @@ class OllamaSettingsPanel(
         promptIntruderPayloadsField.text = config.systemPromptIntruderPayloads
         promptIntruderAttackTypeField.text = config.systemPromptIntruderAttackType
         promptExploreIssueField.text = config.systemPromptExploreIssue
+        promptAutonomousExploreField.text = config.systemPromptAutonomousExplore
+        autonomousMaxIterField.text = config.autonomousExploreMaxIterations.toString()
+        autonomousDelayField.text = config.autonomousExploreDelayMs.toString()
         loginEnabledCheck.isSelected = config.loginEnabled
         loginBaseUrlField.text = config.loginBaseUrl
         loginRequestTemplateField.text = config.loginRequestTemplate

@@ -23,6 +23,33 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setString(key("model"), value)
         }
 
+    /** Optional model override for Repeater tab. Empty = use main model. */
+    var modelRepeater: String
+        get() = preferences.getString(key("modelRepeater")) ?: ""
+        set(value) {
+            preferences.setString(key("modelRepeater"), value)
+        }
+
+    /** Optional model override for Suite tab. Empty = use main model. */
+    var modelSuite: String
+        get() = preferences.getString(key("modelSuite")) ?: ""
+        set(value) {
+            preferences.setString(key("modelSuite"), value)
+        }
+
+    /** Optional model override for Decoder. Empty = use main model. */
+    var modelDecoder: String
+        get() = preferences.getString(key("modelDecoder")) ?: ""
+        set(value) {
+            preferences.setString(key("modelDecoder"), value)
+        }
+
+    fun modelForTool(toolType: burp.api.montoya.core.ToolType): String = when (toolType) {
+        burp.api.montoya.core.ToolType.REPEATER -> modelRepeater.ifBlank { model }
+        burp.api.montoya.core.ToolType.DECODER -> modelDecoder.ifBlank { model }
+        else -> model
+    }
+
     var timeoutSeconds: Int
         get() = preferences.getInteger(key("timeoutSeconds")) ?: OllamaService.DEFAULT_TIMEOUT
         set(value) {
@@ -105,6 +132,24 @@ class OllamaConfig(private val preferences: Preferences) {
         get() = preferences.getString(key("systemPromptExploreIssue")) ?: SecurityPrompts.DEFAULT_EXPLORE_ISSUE
         set(value) {
             preferences.setString(key("systemPromptExploreIssue"), value)
+        }
+
+    var systemPromptAutonomousExplore: String
+        get() = preferences.getString(key("systemPromptAutonomousExplore")) ?: SecurityPrompts.DEFAULT_AUTONOMOUS_EXPLORE
+        set(value) {
+            preferences.setString(key("systemPromptAutonomousExplore"), value)
+        }
+
+    var autonomousExploreMaxIterations: Int
+        get() = preferences.getInteger(key("autonomousExploreMaxIterations")) ?: 5
+        set(value) {
+            preferences.setInteger(key("autonomousExploreMaxIterations"), value.coerceIn(1, 20))
+        }
+
+    var autonomousExploreDelayMs: Int
+        get() = preferences.getInteger(key("autonomousExploreDelayMs")) ?: 500
+        set(value) {
+            preferences.setInteger(key("autonomousExploreDelayMs"), value.coerceIn(0, 5000))
         }
 
     var loginEnabled: Boolean

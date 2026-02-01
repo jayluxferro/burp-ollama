@@ -87,7 +87,8 @@ class OllamaEditorPanel(
     private val hasResponse: Boolean,
     private val getRequest: (HttpRequestResponse) -> String?,
     private val getResponse: (HttpRequestResponse) -> String?,
-    private val showErrorDialog: (String, String, () -> Unit) -> Unit
+    private val showErrorDialog: (String, String, () -> Unit) -> Unit,
+    private val toolType: burp.api.montoya.core.ToolType? = null
 ) : JPanel(BorderLayout()) {
 
     private val contentPreview = JTextArea(5, 40).apply {
@@ -102,9 +103,13 @@ class OllamaEditorPanel(
     private val includeResponseCheck = JCheckBox("Response", hasResponse).apply {
         toolTipText = "Include full response in context"
     }
+    private val includeNotesCheck = JCheckBox("Notes", false).apply {
+        toolTipText = "Include Repeater/tab notes in context"
+    }
+    private val defaultModel: String get() = config.modelForTool(toolType ?: burp.api.montoya.core.ToolType.REPEATER)
     private val modelCombo = JComboBox<String>().apply {
         isEditable = true
-        addItem(config.model)
+        addItem(defaultModel)
     }
     private val askButton = JButton("Ask Ollama").apply {
         toolTipText = "Send context to Ollama (Request and/or Response must be checked)"
@@ -125,8 +130,20 @@ class OllamaEditorPanel(
         toolTipText = "Send detected HTTP request(s) from response to Intruder"
         isEnabled = false
     }
+    private val sendToOrganizerButton = JButton("Send to Organizer").apply {
+        toolTipText = "Send request(s) to Organizer (sends each request, adds response)"
+        isEnabled = false
+    }
     private val copyButton = JButton("Copy").apply {
         toolTipText = "Copy response to clipboard (paste into Repeater notes or elsewhere)"
+    }
+    private val copyReportButton = JButton("Copy as report snippet").apply {
+        toolTipText = "Copy formatted for vulnerability reports"
+        isEnabled = false
+    }
+    private val appendToNotesButton = JButton("Append to notes").apply {
+        toolTipText = "Append AI response to Repeater tab notes"
+        isEnabled = false
     }
     private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
         add(JProgressBar().apply { isIndeterminate = true })
@@ -146,6 +163,7 @@ class OllamaEditorPanel(
         contextPanel.add(JLabel("Context:"))
         if (hasRequest) contextPanel.add(includeRequestCheck)
         if (hasResponse) contextPanel.add(includeResponseCheck)
+        contextPanel.add(includeNotesCheck)
         topPanel.add(contextPanel, BorderLayout.NORTH)
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
@@ -159,7 +177,7 @@ class OllamaEditorPanel(
                     val models = ollamaService.listModels()
                     if (models.isSuccess) {
                         SwingUtilities.invokeLater {
-                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.model
+                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
                             val list = models.getOrNull() ?: emptyList()
                             val items = if (list.isEmpty()) listOf(current) else {
                                 val mutable = list.toMutableList()
@@ -184,7 +202,10 @@ class OllamaEditorPanel(
         val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT))
         responseToolbar.add(sendToRepeaterButton)
         responseToolbar.add(sendToIntruderButton)
+        responseToolbar.add(sendToOrganizerButton)
         responseToolbar.add(copyButton)
+        responseToolbar.add(copyReportButton)
+        responseToolbar.add(appendToNotesButton)
         responseTop.add(responseToolbar, BorderLayout.CENTER)
         responsePanel.add(responseTop, BorderLayout.NORTH)
         responsePanel.add(JScrollPane(responseArea), BorderLayout.CENTER)
@@ -196,9 +217,13 @@ class OllamaEditorPanel(
         askButton.addActionListener { onAskOllama() }
         includeRequestCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         includeResponseCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        includeNotesCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
         sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
+        sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
         copyButton.addActionListener { onCopy() }
+        copyReportButton.addActionListener { onCopyReport() }
+        appendToNotesButton.addActionListener { onAppendToNotes() }
 
         followUpField.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
             KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "askOllama"
@@ -220,6 +245,10 @@ class OllamaEditorPanel(
         conversationHistory.clear()
         responseArea.text = ""
         followUpField.text = ""
+        val hasNotes = requestResponse?.annotations()?.hasNotes() == true
+        includeNotesCheck.isEnabled = hasNotes
+        includeNotesCheck.toolTipText = if (hasNotes) "Include Repeater/tab notes in context" else "No notes on this item"
+        if (!hasNotes) includeNotesCheck.isSelected = false
         updateContentPreview()
         updateSendButtons()
         updateAskButtonState()
@@ -238,6 +267,9 @@ class OllamaEditorPanel(
         if (includeResponseCheck.isSelected && hasResponse) {
             getResponse(rr)?.takeIf { it.isNotBlank() }?.let { parts.add("--- Response ---\n$it") }
         }
+        if (includeNotesCheck.isSelected && rr.annotations().hasNotes()) {
+            rr.annotations().notes()?.takeIf { it.isNotBlank() }?.let { parts.add("--- Notes ---\n$it") }
+        }
         contentPreview.text = parts.joinToString("\n\n").let { truncateForContext(it) }.ifBlank { "" }
     }
 
@@ -250,12 +282,15 @@ class OllamaEditorPanel(
         if (includeResponseCheck.isSelected && hasResponse) {
             getResponse(rr)?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
         }
+        if (includeNotesCheck.isSelected && rr.annotations().hasNotes()) {
+            rr.annotations().notes()?.takeIf { it.isNotBlank() }?.let { parts.add("Notes: $it") }
+        }
         return parts.joinToString("\n\n---\n\n").trim()
     }
 
     private fun onAskOllama() {
         config.applyTo(ollamaService)
-        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.model).trim()
+        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: defaultModel).trim()
         val numCtx = config.numCtx
         val systemPrompt = config.systemPromptExplain
 
@@ -286,6 +321,7 @@ class OllamaEditorPanel(
                         result.fold(
                             onSuccess = {
                                 conversationHistory.add(userMessage to responseArea.text)
+                                currentRequestResponse?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
                                 updateSendButtons()
                                 updateAskButtonState()
                                 OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, responseArea.text)
@@ -309,6 +345,7 @@ class OllamaEditorPanel(
                                     if (conversationHistory.isNotEmpty()) responseArea.append("\n---\n")
                                     responseArea.append(response)
                                     conversationHistory.add(userMessage to response)
+                                    currentRequestResponse?.let { OllamaAnalyzedItemsRegistry.markAnalyzed(it) }
                                     updateSendButtons()
                                     updateAskButtonState()
                                     OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, response)
@@ -332,6 +369,7 @@ class OllamaEditorPanel(
         val enabled = requests.isNotEmpty()
         sendToRepeaterButton.isEnabled = enabled
         sendToIntruderButton.isEnabled = enabled
+        sendToOrganizerButton.isEnabled = enabled
         updateCopyButtonState()
     }
 
@@ -342,19 +380,61 @@ class OllamaEditorPanel(
     }
 
     private fun updateCopyButtonState() {
-        copyButton.isEnabled = responseArea.text.isNotBlank()
+        val hasContent = responseArea.text.isNotBlank()
+        copyButton.isEnabled = hasContent
+        copyReportButton.isEnabled = hasContent
+        appendToNotesButton.isEnabled = hasContent && currentRequestResponse != null
     }
 
     private fun onCopy() {
         val text = responseArea.text
         if (text.isNotBlank()) {
             Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
-            val orig = copyButton.text
-            copyButton.text = "Copied!"
+            showCopiedFeedback(copyButton)
+        }
+    }
+
+    private fun onCopyReport() {
+        val text = responseArea.text
+        if (text.isNotBlank()) {
+            val snippet = buildReportSnippet(text)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(snippet), null)
+            showCopiedFeedback(copyReportButton)
+        }
+    }
+
+    private fun showCopiedFeedback(button: JButton) {
+        val orig = button.text
+        button.text = "Copied!"
+        javax.swing.Timer(1500) { evt ->
+            button.text = orig
+            (evt.source as? javax.swing.Timer)?.stop()
+        }.start()
+    }
+
+    private fun buildReportSnippet(text: String): String = buildString {
+        append("## AI-Assisted Analysis\n\n")
+        append(text.trim())
+        append("\n\n---\n*Generated by Burp Ollama*")
+    }
+
+    private fun onAppendToNotes() {
+        val text = responseArea.text.trim()
+        val rr = currentRequestResponse ?: return
+        if (text.isBlank()) return
+        try {
+            val annotations = rr.annotations()
+            val existing = annotations.notes()?.takeIf { it.isNotBlank() } ?: ""
+            val newNotes = if (existing.isBlank()) text else "$existing\n\n--- AI Analysis ---\n$text"
+            annotations.setNotes(newNotes)
+            showCopiedFeedback(appendToNotesButton)
+            appendToNotesButton.text = "Appended!"
             javax.swing.Timer(1500) { evt ->
-                copyButton.text = orig
+                appendToNotesButton.text = "Append to notes"
                 (evt.source as? javax.swing.Timer)?.stop()
             }.start()
+        } catch (_: Exception) {
+            // Annotations may be read-only in some contexts
         }
     }
 
@@ -374,6 +454,17 @@ class OllamaEditorPanel(
             try {
                 val req = HttpRequest.httpRequest(raw)
                 montoyaApi.intruder().sendToIntruder(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
+            } catch (_: Exception) { /* skip invalid */ }
+        }
+    }
+
+    private fun sendDetectedRequestsToOrganizer() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        for (raw in requests) {
+            try {
+                val req = HttpRequest.httpRequest(raw)
+                val rr = montoyaApi.http().sendRequest(req)
+                montoyaApi.organizer().sendToOrganizer(rr)
             } catch (_: Exception) { /* skip invalid */ }
         }
     }
@@ -419,7 +510,7 @@ class OllamaEditorPanel(
             val models = ollamaService.listModels()
             if (models.isSuccess) {
                 SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.model
+                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
                     val list = models.getOrNull() ?: emptyList()
                     val items = if (list.isEmpty()) listOf(current) else {
                         val mutable = list.toMutableList()
@@ -438,7 +529,7 @@ class OllamaEditorPanel(
  * Ollama tab for HTTP response editor (Repeater response pane).
  */
 class OllamaHttpResponseEditor(
-    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
+    creationContext: EditorCreationContext,
     private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
@@ -451,7 +542,8 @@ class OllamaHttpResponseEditor(
         hasResponse = true,
         getRequest = { rr -> rr.request().toString() },
         getResponse = { rr -> rr.response()?.toString() ?: "" },
-        showErrorDialog
+        showErrorDialog,
+        toolType = creationContext.toolSource().toolType()
     )
     private var currentRequestResponse: HttpRequestResponse? = null
 
@@ -478,7 +570,7 @@ class OllamaHttpResponseEditor(
  * Ollama tab for HTTP request editor (Repeater request pane).
  */
 class OllamaHttpRequestEditor(
-    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
+    creationContext: EditorCreationContext,
     private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
@@ -491,7 +583,8 @@ class OllamaHttpRequestEditor(
         hasResponse = true,
         getRequest = { rr -> rr.request().toString() },
         getResponse = { rr -> rr.response()?.toString() ?: "" },
-        showErrorDialog
+        showErrorDialog,
+        toolType = creationContext.toolSource().toolType()
     )
     private var currentRequestResponse: HttpRequestResponse? = null
 

@@ -47,7 +47,7 @@ class OllamaSuiteTab(
     }
     private val modelCombo = JComboBox<String>().apply {
         isEditable = true
-        addItem(config.model)
+        addItem(config.modelSuite.ifBlank { config.model })
     }
     private val askButton = JButton("Ask Ollama").apply {
         toolTipText = "Send prompt to Ollama"
@@ -65,8 +65,16 @@ class OllamaSuiteTab(
         toolTipText = "Send detected HTTP request(s) from response to Intruder"
         isEnabled = false
     }
+    private val sendToOrganizerButton = JButton("Send to Organizer").apply {
+        toolTipText = "Send request(s) to Organizer (sends each request, adds response)"
+        isEnabled = false
+    }
     private val copyButton = JButton("Copy to clipboard").apply {
         toolTipText = "Copy response to clipboard (paste into Repeater notes or elsewhere)"
+    }
+    private val copyReportButton = JButton("Copy as report snippet").apply {
+        toolTipText = "Copy formatted for vulnerability reports"
+        isEnabled = false
     }
     private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
         add(JProgressBar().apply { isIndeterminate = true })
@@ -94,6 +102,11 @@ class OllamaSuiteTab(
         wrapStyleWord = true
     }
     private val suggestionsHeaderLabel = JLabel("Proactive suggestions")
+    private val analyzedListModel = DefaultListModel<String>()
+    private val analyzedList = JList(analyzedListModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+    }
+    private val analyzedHeaderLabel = JLabel("Recently analyzed items")
     private lateinit var tabbedPane: JTabbedPane
 
     init {
@@ -112,7 +125,7 @@ class OllamaSuiteTab(
                     val models = ollamaService.listModels()
                     if (models.isSuccess) {
                         SwingUtilities.invokeLater {
-                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.model
+                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.modelSuite.ifBlank { config.model }
                             val list = models.getOrNull() ?: emptyList()
                             val items = if (list.isEmpty()) listOf(current) else {
                                 val mutable = list.toMutableList()
@@ -135,7 +148,9 @@ class OllamaSuiteTab(
         val responseToolbar = JPanel(FlowLayout(FlowLayout.LEFT))
         responseToolbar.add(sendToRepeaterButton)
         responseToolbar.add(sendToIntruderButton)
+        responseToolbar.add(sendToOrganizerButton)
         responseToolbar.add(copyButton)
+        responseToolbar.add(copyReportButton)
         responseTop.add(responseToolbar, BorderLayout.CENTER)
         responsePanel.add(responseTop, BorderLayout.NORTH)
         responsePanel.add(JScrollPane(responseArea), BorderLayout.CENTER)
@@ -216,16 +231,23 @@ class OllamaSuiteTab(
             }
         }
 
+        val analyzedPanel = JPanel(BorderLayout())
+        analyzedPanel.add(analyzedHeaderLabel, BorderLayout.NORTH)
+        analyzedPanel.add(JScrollPane(analyzedList), BorderLayout.CENTER)
+
         tabbedPane = JTabbedPane()
         tabbedPane.addTab("Chat", chatPanel)
         tabbedPane.addTab("Tasks", tasksPanel)
         tabbedPane.addTab("Suggestions", suggestionsPanel)
+        tabbedPane.addTab("Analyzed", analyzedPanel)
         add(tabbedPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
         sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
         sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
+        sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
         copyButton.addActionListener { onCopy() }
+        copyReportButton.addActionListener { onCopyReport() }
 
         promptArea.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
             KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "askOllama"
@@ -241,8 +263,26 @@ class OllamaSuiteTab(
 
         OllamaTaskRegistry.addListener { refreshTaskList() }
         OllamaSuggestionRegistry.addListener { refreshSuggestionsList() }
+        OllamaAnalyzedItemsRegistry.addListener { refreshAnalyzedList() }
 
-        SwingUtilities.invokeLater { refreshModelCombo(); updateAskButtonState(); updateCopyButtonState(); refreshSuggestionsList() }
+        SwingUtilities.invokeLater {
+            refreshModelCombo()
+            updateAskButtonState()
+            updateCopyButtonState()
+            refreshSuggestionsList()
+            refreshAnalyzedList()
+        }
+    }
+
+    private fun refreshAnalyzedList() {
+        val fingerprints = OllamaAnalyzedItemsRegistry.allFingerprints()
+        analyzedHeaderLabel.text = if (fingerprints.isEmpty()) {
+            "No analyzed items yet. Use Ask Ollama in Repeater or context menu."
+        } else {
+            "Recently analyzed (${fingerprints.size})"
+        }
+        analyzedListModel.clear()
+        fingerprints.forEach { analyzedListModel.addElement(it) }
     }
 
     private fun refreshSuggestionsList() {
@@ -279,7 +319,7 @@ class OllamaSuiteTab(
 
     private fun onAskOllama() {
         config.applyTo(ollamaService)
-        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.model).trim()
+        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.modelSuite.ifBlank { config.model }).trim()
         val numCtx = config.numCtx
         val systemPrompt = config.systemPromptExplain
 
@@ -363,6 +403,7 @@ class OllamaSuiteTab(
         val enabled = requests.isNotEmpty()
         sendToRepeaterButton.isEnabled = enabled
         sendToIntruderButton.isEnabled = enabled
+        sendToOrganizerButton.isEnabled = enabled
         updateCopyButtonState()
     }
 
@@ -371,20 +412,41 @@ class OllamaSuiteTab(
     }
 
     private fun updateCopyButtonState() {
-        copyButton.isEnabled = responseArea.text.isNotBlank()
+        val hasContent = responseArea.text.isNotBlank()
+        copyButton.isEnabled = hasContent
+        copyReportButton.isEnabled = hasContent
     }
 
     private fun onCopy() {
         val text = responseArea.text
         if (text.isNotBlank()) {
             Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
-            val orig = copyButton.text
-            copyButton.text = "Copied!"
-            javax.swing.Timer(1500) { evt ->
-                copyButton.text = orig
-                (evt.source as? javax.swing.Timer)?.stop()
-            }.start()
+            showCopiedFeedback(copyButton)
         }
+    }
+
+    private fun onCopyReport() {
+        val text = responseArea.text
+        if (text.isNotBlank()) {
+            val snippet = buildReportSnippet(text)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(snippet), null)
+            showCopiedFeedback(copyReportButton)
+        }
+    }
+
+    private fun showCopiedFeedback(button: javax.swing.JButton) {
+        val orig = button.text
+        button.text = "Copied!"
+        javax.swing.Timer(1500) { evt ->
+            button.text = orig
+            (evt.source as? javax.swing.Timer)?.stop()
+        }.start()
+    }
+
+    private fun buildReportSnippet(text: String): String = buildString {
+        append("## AI-Assisted Analysis\n\n")
+        append(text.trim())
+        append("\n\n---\n*Generated by Burp Ollama*")
     }
 
     private fun sendDetectedRequestsToRepeater() {
@@ -407,6 +469,17 @@ class OllamaSuiteTab(
         }
     }
 
+    private fun sendDetectedRequestsToOrganizer() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        for (raw in requests) {
+            try {
+                val req = HttpRequest.httpRequest(raw)
+                val rr = montoyaApi.http().sendRequest(req)
+                montoyaApi.organizer().sendToOrganizer(rr)
+            } catch (_: Exception) { /* skip invalid */ }
+        }
+    }
+
     private fun setLoading(loading: Boolean) {
         SwingUtilities.invokeLater {
             loadingPanel.isVisible = loading
@@ -420,7 +493,7 @@ class OllamaSuiteTab(
             val models = ollamaService.listModels()
             if (models.isSuccess) {
                 SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.model
+                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.modelSuite.ifBlank { config.model }
                     val list = models.getOrNull() ?: emptyList()
                     val items = if (list.isEmpty()) listOf(current) else {
                         val mutable = list.toMutableList()

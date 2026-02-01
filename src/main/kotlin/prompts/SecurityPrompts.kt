@@ -49,4 +49,10 @@ Host: example.com
 ...
 ```
 Suggest 2-5 follow-up requests. Focus on: IDOR, access control, parameter tampering, and proof-of-concept. Be concise."""
+
+    const val DEFAULT_AUTONOMOUS_EXPLORE =
+        """You are a penetration tester. Given a Scanner finding and optionally previous request/response pairs, output exactly ONE raw HTTP/1.1 follow-up request to validate or exploit the finding.
+Output ONLY the raw HTTP request (no markdown, no explanation). Include Host and all required headers.
+If no further requests are needed (finding validated, or no more ideas), output exactly: DONE
+Be concise. One request per turn."""
 }

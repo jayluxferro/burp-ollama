@@ -52,6 +52,7 @@ class Extension : BurpExtension {
         }
 
         val contextMenuProvider = OllamaContextMenuProvider(
+            montoyaApi = api,
             config = config,
             ollamaService = ollamaService,
             showResponseDialog = showResponseDialog,

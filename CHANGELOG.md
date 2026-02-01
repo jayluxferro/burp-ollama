@@ -30,3 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Intruder payload suggestions** – Context menu "Intruder" submenu with "Suggest payloads" and "Suggest attack type" (Sniper, Battering ram, Pitchfork, Cluster bomb); customizable prompts in Settings
 - **Proactive suggestions** – HTTP handler detects login, auth, API patterns; Suggestions sub-tab in Ollama tab; "Use in Chat" to pre-fill prompt; enable/disable in Settings
 - **Explore issue** – Context menu "Explore issue" on Scanner findings; AI suggests follow-up HTTP requests to validate/exploit; Send to Repeater/Intruder in response dialog; customizable prompt in Settings
+- **Notes integration** – Include Notes checkbox in Repeater Ollama tab when item has notes; notes included in AI context when checked
+- **Visual indicators** – "✓ Analyzed by Ollama" in context menu when item was previously analyzed (Proxy/Site map, message editor)
+- **Per-tool model override** – Optional model overrides for Repeater tab and Suite tab in Settings (leave blank to use default)
+- **Report snippet generation** – "Copy as report snippet" button in Repeater, Suite tab, and response dialog; formats for vulnerability reports
+- **Autonomous Explore** – Context menu "Autonomous Explore" on Scanner findings; AI sends follow-up HTTP requests to validate/exploit (max 5 iterations, in-scope only); confirmation dialog before starting
+- **Append to notes** – "Append to notes" button in Repeater Ollama tab; appends AI response to Repeater tab notes via Montoya Annotations API
+- **Decoder model override** – Optional model override for Decoder in Settings; per-tool model selection (Repeater, Suite, Decoder)
+- **Autonomous Explore settings** – Configurable max iterations (1–20), delay between requests (ms), and prompt in Settings
+- **Send to Organizer** – "Send to Organizer" button in Repeater, Suite tab, and response dialog; sends extracted HTTP requests, fetches response, adds to Organizer
+- **Recently analyzed list** – "Analyzed" tab in Ollama Suite tab showing items analyzed by Ollama (method + URL); auto-refreshes when new analyses complete
