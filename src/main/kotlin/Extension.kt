@@ -1,11 +1,14 @@
 import burp.api.montoya.BurpExtension
 import burp.api.montoya.MontoyaApi
+import proactive.OllamaProactiveHandler
 import session.OllamaLoginSessionAction
 import ui.OllamaContextMenuProvider
 import ui.OllamaHttpRequestEditorProvider
 import ui.OllamaHttpResponseEditorProvider
 import ui.OllamaResponseDialog
+import ui.StreamingDialogCallbacks
 import ui.OllamaSettingsPanel
+import ui.OllamaSuiteTab
 import ollama.OllamaConfig
 import ollama.OllamaService
 import javax.swing.JOptionPane
@@ -44,8 +47,8 @@ class Extension : BurpExtension {
             OllamaResponseDialog.show(frame, title, content, retry)
         }
 
-        val showStreamingResponseDialog: (String, () -> Unit) -> Pair<(String) -> Unit, (String) -> Unit> = { title, retry ->
-            OllamaResponseDialog.showStreaming(frame, title, retry)
+        val showStreamingResponseDialog: (String, (() -> Unit)?, Boolean) -> StreamingDialogCallbacks = { title, retry, withSendButtons ->
+            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null)
         }
 
         val contextMenuProvider = OllamaContextMenuProvider(
@@ -60,13 +63,17 @@ class Extension : BurpExtension {
         }
 
         api.userInterface().registerSettingsPanel(settingsPanel)
+        val ollamaSuiteTab = OllamaSuiteTab(api, config, ollamaService, showErrorDialog)
+        api.userInterface().applyThemeToComponent(ollamaSuiteTab)
+        api.userInterface().registerSuiteTab("Ollama", ollamaSuiteTab)
         api.http().registerSessionHandlingAction(OllamaLoginSessionAction(api, config))
         api.userInterface().registerContextMenuItemsProvider(contextMenuProvider)
+        api.http().registerHttpHandler(OllamaProactiveHandler { config.proactiveSuggestionsEnabled })
         api.userInterface().registerHttpRequestEditorProvider(
-            OllamaHttpRequestEditorProvider(config, ollamaService, showErrorDialog)
+            OllamaHttpRequestEditorProvider(api, config, ollamaService, showErrorDialog)
         )
         api.userInterface().registerHttpResponseEditorProvider(
-            OllamaHttpResponseEditorProvider(config, ollamaService, showErrorDialog)
+            OllamaHttpResponseEditorProvider(api, config, ollamaService, showErrorDialog)
         )
         api.userInterface().applyThemeToComponent(settingsPanel)
 

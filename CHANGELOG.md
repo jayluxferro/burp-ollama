@@ -18,3 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Advanced prompts** – Customize Explain headers, Analyze, Validate false positive, Decipher, Generate login
 - **Route via Burp** – Option to send Ollama requests through Burp HTTP API (default: off)
 - **Clean unload** – Executor shutdown on extension unload (BApp Store compliance)
+- **Context lozenges** – Request/Response checkboxes in Ollama tab to choose what to include in context
+- **Send to Repeater/Intruder** – Parse AI response for HTTP requests; send to Repeater or Intruder with one click
+- **Unified Ollama Suite tab** – Central hub for AI (general queries); Chat + Tasks sub-tabs
+- **Proxy History + Site Map** – "Ask Ollama" on selected items; "Analyze selected (N items)" for multi-select
+- **Ollama Tasks tab** – Central task list for all AI interactions (Suite, Repeater, context menu)
+- **Copy to clipboard** – Copy response to clipboard from Ollama tab, Suite tab, and response dialog (paste into Repeater notes)
+- **Loading indicators** – Indeterminate progress bar and "Querying Ollama…" label in Repeater tab, Suite tab; "Loading…" in context-menu response dialog; Ask button disabled during requests
+- **Settings panel** – "Saved" status label timer now correctly clears after 2 seconds
+- **UX polish** – Ask button enabled/disabled by context; Copy shows "Copied!" feedback; Enter (Repeater follow-up) / Ctrl+Enter (Suite prompt) to submit; Refresh model button in Repeater and Suite tabs; Tasks tab empty state; tooltips
+- **Intruder payload suggestions** – Context menu "Intruder" submenu with "Suggest payloads" and "Suggest attack type" (Sniper, Battering ram, Pitchfork, Cluster bomb); customizable prompts in Settings
+- **Proactive suggestions** – HTTP handler detects login, auth, API patterns; Suggestions sub-tab in Ollama tab; "Use in Chat" to pre-fill prompt; enable/disable in Settings
+- **Explore issue** – Context menu "Explore issue" on Scanner findings; AI suggests follow-up HTTP requests to validate/exploit; Send to Repeater/Intruder in response dialog; customizable prompt in Settings

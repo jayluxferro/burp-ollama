@@ -47,6 +47,12 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setBoolean(key("useBurpHttpApi"), value)
         }
 
+    var proactiveSuggestionsEnabled: Boolean
+        get() = preferences.getBoolean(key("proactiveSuggestionsEnabled")) ?: true
+        set(value) {
+            preferences.setBoolean(key("proactiveSuggestionsEnabled"), value)
+        }
+
     var systemPromptExplain: String
         get() = preferences.getString(key("systemPromptExplain")) ?: SecurityPrompts.DEFAULT_EXPLAIN_SELECTION
         set(value) {
@@ -81,6 +87,24 @@ class OllamaConfig(private val preferences: Preferences) {
         get() = preferences.getString(key("systemPromptGenerateLogin")) ?: SecurityPrompts.DEFAULT_GENERATE_LOGIN_SEQUENCE
         set(value) {
             preferences.setString(key("systemPromptGenerateLogin"), value)
+        }
+
+    var systemPromptIntruderPayloads: String
+        get() = preferences.getString(key("systemPromptIntruderPayloads")) ?: SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_PAYLOADS
+        set(value) {
+            preferences.setString(key("systemPromptIntruderPayloads"), value)
+        }
+
+    var systemPromptIntruderAttackType: String
+        get() = preferences.getString(key("systemPromptIntruderAttackType")) ?: SecurityPrompts.DEFAULT_INTRUDER_SUGGEST_ATTACK_TYPE
+        set(value) {
+            preferences.setString(key("systemPromptIntruderAttackType"), value)
+        }
+
+    var systemPromptExploreIssue: String
+        get() = preferences.getString(key("systemPromptExploreIssue")) ?: SecurityPrompts.DEFAULT_EXPLORE_ISSUE
+        set(value) {
+            preferences.setString(key("systemPromptExploreIssue"), value)
         }
 
     var loginEnabled: Boolean
