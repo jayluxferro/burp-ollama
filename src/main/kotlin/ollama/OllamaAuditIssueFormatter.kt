@@ -8,6 +8,10 @@ import burp.api.montoya.scanner.audit.issues.AuditIssue
  */
 object OllamaAuditIssueFormatter {
 
+    /** One-line summary for logging (e.g. in AuditIssueHandler). */
+    fun summary(issue: AuditIssue): String =
+        "${issue.severity()} – ${issue.name()} @ ${issue.baseUrl()}"
+
     fun format(issue: AuditIssue): String {
         val sb = StringBuilder()
         sb.appendLine("## Scanner Finding: ${issue.name()}")

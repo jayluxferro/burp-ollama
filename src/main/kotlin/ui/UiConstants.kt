@@ -1,5 +1,6 @@
 package ui
 
+import java.awt.Font
 import java.awt.Insets
 import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
@@ -8,7 +9,7 @@ import javax.swing.border.TitledBorder
 
 /**
  * Shared UI constants for consistent padding, spacing, and alignment across all Ollama UI components.
- * Keeps the extension looking classy and cohesive.
+ * Keeps the extension looking polished and cohesive.
  */
 object UiConstants {
 
@@ -50,4 +51,13 @@ object UiConstants {
         TitledBorder(EtchedBorder(EtchedBorder.LOWERED), title, TitledBorder.LEADING, TitledBorder.TOP),
         EmptyBorder(6, 6, 6, 6)
     )
+
+    /** Input field border — etched for visibility */
+    fun inputFieldBorder() = CompoundBorder(
+        EtchedBorder(EtchedBorder.LOWERED),
+        EmptyBorder(2, 2, 2, 2)
+    )
+
+    /** Primary CTA font — slightly bolder for emphasis */
+    fun primaryButtonFont(baseFont: Font) = baseFont.deriveFont(Font.BOLD, baseFont.size2D)
 }

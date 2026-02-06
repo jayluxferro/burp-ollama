@@ -53,8 +53,12 @@ class OllamaQuickPromptDialog(
         isEditable = true
         addItem(config.modelSuite.ifBlank { config.model })
     }
+    private val quickSystemPromptCombo = JComboBox<String>().apply {
+        toolTipText = "System prompt. None = only your question."
+    }
     private val askButton = JButton("Ask").apply {
-        toolTipText = "Send to Ollama"
+        toolTipText = "Send to Ollama (Ctrl+Enter)"
+        font = UiConstants.primaryButtonFont(font)
     }
     private val responseArea = MarkdownTextPane(12, 50)
     private val copyButton = JButton("Copy").apply {
@@ -62,6 +66,10 @@ class OllamaQuickPromptDialog(
         isEnabled = false
     }
     private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Querying…"))
         isVisible = false
@@ -93,6 +101,14 @@ class OllamaQuickPromptDialog(
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
         toolbar.add(modelCombo)
+        toolbar.add(JButton("Refresh").apply {
+            toolTipText = "Refresh model list from Ollama"
+            addActionListener { refreshModelCombo() }
+        })
+        config.systemPromptOptions().map { it.first }.forEach { quickSystemPromptCombo.addItem(it) }
+        quickSystemPromptCombo.selectedIndex = 1.coerceIn(0, quickSystemPromptCombo.itemCount - 1)
+        toolbar.add(JLabel("System prompt:"))
+        toolbar.add(quickSystemPromptCombo)
         toolbar.add(askButton)
         topPanel.add(toolbar, BorderLayout.SOUTH)
 
@@ -151,7 +167,8 @@ class OllamaQuickPromptDialog(
         config.applyTo(ollamaService)
         val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.model).trim()
         val numCtx = config.numCtx
-        val systemPrompt = config.systemPromptExplain
+        val options = config.systemPromptOptions()
+        val systemPrompt = options.getOrNull(quickSystemPromptCombo.selectedIndex.coerceIn(0, options.size - 1))?.second ?: config.systemPromptExplain
 
         val userMessage = promptArea.text.trim()
         if (userMessage.isBlank()) return

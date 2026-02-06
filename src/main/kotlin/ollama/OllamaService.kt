@@ -458,18 +458,28 @@ class OllamaService(
 
     private fun toJson(req: ChatRequest): String {
         val messagesJson = req.messages.joinToString(",") { msg ->
-            """{"role":"${escapeJson(msg.role)}","content":"${escapeJson(msg.content)}"}"""
+            val content = if (msg.content.isBlank()) " " else msg.content
+            """{"role":"${escapeJson(msg.role)}","content":"${escapeJson(content)}"}"""
         }
-        val optionsJson = req.options?.let { ""","options":{"num_ctx":${it.num_ctx}}""" } ?: ""
+        val optionsJson = req.options?.let { o -> o.num_ctx?.let { ""","options":{"num_ctx":$it}""" } ?: "" } ?: ""
         return """{"model":"${escapeJson(req.model)}","messages":[$messagesJson],"stream":${req.stream}$optionsJson}"""
     }
 
-    private fun escapeJson(s: String): String =
-        s.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
+    private fun escapeJson(s: String): String {
+        val sb = StringBuilder(s.length + 16)
+        for (c in s) {
+            when (c) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                in '\u0000'..'\u001F' -> sb.append("\\u%04x".format(c.code))
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
 
     companion object {
         const val DEFAULT_BASE_URL = "http://localhost:11434"

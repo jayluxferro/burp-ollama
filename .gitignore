@@ -44,3 +44,5 @@ bin/
 ### Project ###
 .docs/
 git-push
+.cursor/
+burp/

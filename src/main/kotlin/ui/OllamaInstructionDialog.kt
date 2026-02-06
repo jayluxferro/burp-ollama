@@ -56,6 +56,7 @@ class OllamaInstructionDialog(
     }
     private val runButton = JButton("Run").apply {
         toolTipText = "Send to Ollama"
+        font = UiConstants.primaryButtonFont(font)
     }
     private var contentChoice: String = "request" // request | response | both | selection | clipboard
 

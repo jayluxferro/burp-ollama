@@ -19,16 +19,6 @@ import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
 
 /**
- * Shared state for context menu model/chain selection.
- * Stored at class level so it persists across menu invocations (Burp may call provideMenuItems
- * on different instances or the menu may be rebuilt; instance vars would be lost).
- */
-private object ContextMenuModelState {
-    var modelOverride: String? = null
-    var bypassChain: Boolean = false
-}
-
-/**
  * Context menu provider for "Ask Ollama" on request/response content and Scanner findings.
  * Shows when in message editor (Repeater, Proxy, etc.), when items selected from history,
  * or when Scanner audit issues are selected (Burp Professional).
@@ -60,6 +50,7 @@ class OllamaContextMenuProvider(
                 val subMenu = createPromptTemplateMenu(text, "Ask Ollama", listOf(rr))
                 subMenu.add(createAskWithInstructionMenuItem(messageEditor, selTextAtBuild, listOf(rr)), 0)
                 subMenu.add(createModelSelectorMenu(), 1)
+                subMenu.add(createMenuItem("Ask Ollama (no system prompt)", text, "", listOf(rr)), 2)
                 if (OllamaAnalyzedItemsRegistry.wasAnalyzed(rr)) {
                     subMenu.add(JMenuItem("✓ Analyzed by Ollama").apply {
                         isEnabled = false
@@ -102,6 +93,10 @@ class OllamaContextMenuProvider(
                     .map { getTextFromMessageEditor(it) }
                     .orElse(null)
                 subMenu.add(createAskWithInstructionMenuItem(requestText, responseText, selFromEditor, listOf(rr)))
+                val combinedContent = listOfNotNull(requestText, responseText).joinToString("\n\n---\n\n").trim()
+                if (combinedContent.isNotBlank()) {
+                    subMenu.add(createMenuItem("Ask Ollama (no system prompt)", combinedContent, "", listOf(rr)))
+                }
                 if (requestText.isNotBlank()) {
                     subMenu.add(createPromptTemplateMenu(requestText, "About request", listOf(rr)))
                 }
@@ -113,6 +108,7 @@ class OllamaContextMenuProvider(
                     "--- Request ${i + 1} ---\n${rr.request()}\n\n--- Response ${i + 1} ---\n${rr.response()?.toString() ?: "(no response)"}"
                 }.joinToString("\n\n")
                 subMenu.add(createMenuItem("Analyze selected (${selected.size} items)", combined, config.systemPromptAnalyze, selected))
+                subMenu.add(createMenuItem("Ask Ollama (no system prompt)", combined, "", selected))
                 subMenu.add(javax.swing.JSeparator())
                 subMenu.add(createBatchMenuItem("Explain all (${selected.size} items)", selected, config.systemPromptExplain))
                 subMenu.add(createBatchMenuItem("Analyze all (${selected.size} items)", selected, config.systemPromptAnalyze))
@@ -150,6 +146,15 @@ class OllamaContextMenuProvider(
         val menu = JMenu("Ask Ollama")
         menu.add(createModelSelectorMenu())
         menu.add(javax.swing.JSeparator())
+        if (issues.size > 1) {
+            val items = issues.map { ollama.OllamaAuditIssueFormatter.format(it) to it.name() }
+            menu.add(JMenuItem("Batch validate false positive (${issues.size} issues)").apply {
+                addActionListener {
+                    showBatchDialog("Validate false positive", items, config.systemPromptValidateFalsePositive, effectiveModel())
+                }
+            })
+            menu.add(javax.swing.JSeparator())
+        }
         for (issue in issues) {
             val text = ollama.OllamaAuditIssueFormatter.format(issue)
             val shortName = issue.name().take(40) + if (issue.name().length > 40) "…" else ""

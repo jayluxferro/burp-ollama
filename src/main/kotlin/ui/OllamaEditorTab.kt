@@ -124,14 +124,23 @@ class OllamaEditorPanel(
         isEditable = true
         addItem(defaultModel)
     }
+    private val editorSystemPromptCombo = JComboBox<String>().apply {
+        toolTipText = "System prompt for this request. None = only your payload + question."
+    }
     private val askButton = JButton("Ask Ollama").apply {
-        toolTipText = "Send context to Ollama (Request and/or Response must be checked)"
+        toolTipText = "Send context to Ollama (Request and/or Response must be checked). Ctrl+Enter from follow-up."
+        font = UiConstants.primaryButtonFont(font)
     }
     private val followUpField = JTextArea(2, 40).apply {
         lineWrap = true
         wrapStyleWord = true
         margin = Insets(4, 6, 4, 6)
-        toolTipText = "Type or paste follow-up (code, long text). Ctrl+Enter to send."
+        toolTipText = "Type follow-up here, then click Send or press Ctrl+Enter."
+    }
+    private val followUpSendButton = JButton("Send").apply {
+        toolTipText = "Send follow-up (or press Ctrl+Enter in the field above)"
+        font = UiConstants.primaryButtonFont(font)
+        isEnabled = false
     }
     private val responseArea = MarkdownTextPane(15, 40)
     private val sendToRepeaterButton = JButton("Send to Repeater").apply {
@@ -160,9 +169,16 @@ class OllamaEditorPanel(
     private val clearButton = JButton("Clear").apply {
         toolTipText = "Clear response and conversation, start fresh"
     }
+    private val exportConversationButton = JButton("Export conversation").apply {
+        toolTipText = "Save conversation as Markdown file"
+        isEnabled = false
+    }
     private val notesEditable: Boolean get() = toolType != burp.api.montoya.core.ToolType.PROXY
     private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
-        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Querying Ollama…"))
         isVisible = false
@@ -217,7 +233,8 @@ class OllamaEditorPanel(
                     val models = ollamaService.listModels()
                     if (models.isSuccess) {
                         SwingUtilities.invokeLater {
-                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
+                            val preferred = ContextMenuModelState.modelOverride?.takeIf { it.isNotBlank() }
+                            val current = preferred ?: (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
                             val list = models.getOrNull() ?: emptyList()
                             val items = if (list.isEmpty()) listOf(current) else {
                                 val mutable = list.toMutableList()
@@ -231,6 +248,14 @@ class OllamaEditorPanel(
                 }
             }
         })
+        config.systemPromptOptions().map { it.first }.forEach { editorSystemPromptCombo.addItem(it) }
+        editorSystemPromptCombo.selectedIndex = 1.coerceIn(0, editorSystemPromptCombo.itemCount - 1) // Default (Explain)
+        toolbar.add(JLabel("System prompt:"))
+        toolbar.add(editorSystemPromptCombo)
+        modelCombo.addActionListener {
+            val sel = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim()
+            if (!sel.isNullOrBlank()) ContextMenuModelState.modelOverride = sel
+        }
         toolbar.add(askButton)
         actionsPanel.add(toolbar)
         actionsPanel.add(Box.createVerticalStrut(6))
@@ -240,8 +265,9 @@ class OllamaEditorPanel(
         followUpField.minimumSize = Dimension(200, 44)
         followUpField.maximumSize = Dimension(600, 120)
         followUpRow.add(JScrollPane(followUpField).apply {
-            border = CompoundBorder(EtchedBorder(EtchedBorder.LOWERED), EmptyBorder(2, 2, 2, 2))
+            border = UiConstants.inputFieldBorder()
         })
+        followUpRow.add(followUpSendButton)
         actionsPanel.add(followUpRow)
         topPanel.add(actionsPanel, BorderLayout.SOUTH)
 
@@ -267,6 +293,7 @@ class OllamaEditorPanel(
         val row2 = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 2))
         row2.add(copyButton)
         row2.add(copyReportButton)
+        row2.add(exportConversationButton)
         row2.add(appendToNotesButton)
         row2.add(clearButton)
         responseToolbar.add(row1)
@@ -281,6 +308,7 @@ class OllamaEditorPanel(
         add(splitPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
+        followUpSendButton.addActionListener { onAskOllama() }
         includeRequestCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         includeResponseCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
         includeNotesCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
@@ -298,6 +326,7 @@ class OllamaEditorPanel(
         sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
         copyButton.addActionListener { onCopy() }
         copyReportButton.addActionListener { onCopyReport() }
+        exportConversationButton.addActionListener { onExportConversation() }
         appendToNotesButton.addActionListener { onAppendToNotes() }
         clearButton.addActionListener { onClear() }
 
@@ -314,6 +343,11 @@ class OllamaEditorPanel(
         })
 
         SwingUtilities.invokeLater { refreshModelCombo(); updateAskButtonState() }
+        addHierarchyListener { e ->
+            if ((e.changeFlags.toInt() and java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing) {
+                updateAskButtonState()
+            }
+        }
     }
 
     fun setRequestResponse(requestResponse: HttpRequestResponse?) {
@@ -390,11 +424,17 @@ class OllamaEditorPanel(
         return parts.joinToString("\n\n---\n\n").trim()
     }
 
+    private fun selectedEditorSystemPrompt(): String {
+        val options = config.systemPromptOptions()
+        val idx = editorSystemPromptCombo.selectedIndex.coerceIn(0, options.size - 1)
+        return options.getOrNull(idx)?.second ?: config.systemPromptExplain
+    }
+
     private fun onAskOllama() {
         config.applyTo(ollamaService)
         val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: defaultModel).trim()
         val numCtx = config.numCtx
-        val systemPrompt = config.systemPromptExplain
+        val systemPrompt = selectedEditorSystemPrompt()
 
         val userMessage = if (conversationHistory.isEmpty()) {
             val content = buildContextContent().trim()
@@ -499,13 +539,16 @@ class OllamaEditorPanel(
     private fun updateAskButtonState() {
         val hasContext = buildContextContent().trim().isNotBlank()
         val hasFollowUp = followUpField.text.trim().isNotBlank()
+        // Ask: enabled when there is context to send (request/response first time) or when in conversation and user typed follow-up
         askButton.isEnabled = hasContext || (conversationHistory.isNotEmpty() && hasFollowUp)
+        followUpSendButton.isEnabled = conversationHistory.isNotEmpty() && hasFollowUp
     }
 
     private fun updateCopyButtonState() {
         val hasContent = responseArea.text.isNotBlank()
         copyButton.isEnabled = hasContent
         copyReportButton.isEnabled = hasContent
+        exportConversationButton.isEnabled = conversationHistory.isNotEmpty()
         appendToNotesButton.isEnabled = hasContent && currentRequestResponse != null && notesEditable
         appendToNotesButton.toolTipText = when {
             !notesEditable -> "Notes are read-only in Proxy. Send to Repeater first to append."
@@ -533,9 +576,40 @@ class OllamaEditorPanel(
     private fun onCopyReport() {
         val text = responseArea.text
         if (text.isNotBlank()) {
-            val snippet = buildReportSnippet(text)
+            val snippet = ReportSnippetFormatter.format(text, config.reportSnippetTemplate)
             Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(snippet), null)
             showCopiedFeedback(copyReportButton)
+        }
+    }
+
+    private fun onExportConversation() {
+        if (conversationHistory.isEmpty()) return
+        val chooser = javax.swing.JFileChooser().apply {
+            dialogTitle = "Export conversation"
+            selectedFile = java.io.File("ollama-repeater-export.md")
+        }
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return
+        val file = chooser.selectedFile ?: return
+        val markdown = buildString {
+            append("# Ollama Repeater Conversation\n\n")
+            for ((user, assistant) in conversationHistory) {
+                append("## User\n\n")
+                append(user.trim())
+                append("\n\n## Assistant\n\n")
+                append(assistant.trim())
+                append("\n\n---\n\n")
+            }
+        }
+        try {
+            file.writeText(markdown)
+            showCopiedFeedback(exportConversationButton)
+            exportConversationButton.text = "Exported!"
+            javax.swing.Timer(1500) { evt ->
+                exportConversationButton.text = "Export conversation"
+                (evt.source as? javax.swing.Timer)?.stop()
+            }.start()
+        } catch (e: Exception) {
+            showErrorDialog("Export failed", "Could not save file: ${e.message}") { }
         }
     }
 
@@ -546,12 +620,6 @@ class OllamaEditorPanel(
             button.text = orig
             (evt.source as? javax.swing.Timer)?.stop()
         }.start()
-    }
-
-    private fun buildReportSnippet(text: String): String = buildString {
-        append("## AI-Assisted Analysis\n\n")
-        append(text.trim())
-        append("\n\n---\n*Generated by Burp Ollama*")
     }
 
     private fun onAppendToNotes() {
@@ -666,7 +734,8 @@ class OllamaEditorPanel(
             val models = ollamaService.listModels()
             if (models.isSuccess) {
                 SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
+                    val preferred = ContextMenuModelState.modelOverride?.takeIf { it.isNotBlank() }
+                    val current = preferred ?: (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
                     val list = models.getOrNull() ?: emptyList()
                     val items = if (list.isEmpty()) listOf(current) else {
                         val mutable = list.toMutableList()

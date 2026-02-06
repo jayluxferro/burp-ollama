@@ -90,6 +90,13 @@ class OllamaSettingsPanel(
     private val proactiveSuggestionsCheck = JCheckBox("Enable proactive suggestions", config.proactiveSuggestionsEnabled).apply {
         toolTipText = "Detect login, auth, API patterns and suggest AI actions in Ollama tab"
     }
+    private val reportSnippetTemplateCombo = JComboBox(arrayOf("Default", "OWASP")).apply {
+        toolTipText = "Format for Copy as report snippet"
+        selectedIndex = when (config.reportSnippetTemplate) {
+            ReportSnippetFormatter.TEMPLATE_OWASP -> 1
+            else -> 0
+        }
+    }
     private val systemPromptField = JTextArea(config.systemPromptExplain, 3, 50).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -359,9 +366,15 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        formPanel.add(JLabel("Report snippet template:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(reportSnippetTemplateCombo, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
         formPanel.add(JLabel("System prompt (explain):"), gbc)
         gbc.gridx = 1
-        formPanel.add(createPromptEditPanel(systemPromptField, "System prompt (explain)", "Default prompt for Explain selection", SecurityPrompts.DEFAULT_EXPLAIN_SELECTION), gbc)
+        formPanel.add(createPromptEditPanel(systemPromptField, "System prompt (explain)", "Default prompt for Explain selection. Leave blank to send only the request/response so the model focuses entirely on the content.", SecurityPrompts.DEFAULT_EXPLAIN_SELECTION), gbc)
         gbc.gridx = 0
         gbc.gridy++
 
@@ -680,6 +693,10 @@ class OllamaSettingsPanel(
         config.timeoutSeconds = timeoutField.text.toIntOrNull() ?: OllamaService.DEFAULT_TIMEOUT
         config.numCtx = numCtxField.text.toIntOrNull() ?: OllamaConfig.DEFAULT_NUM_CTX
         config.streaming = streamingCheck.isSelected
+        config.reportSnippetTemplate = when (reportSnippetTemplateCombo.selectedIndex) {
+            1 -> ReportSnippetFormatter.TEMPLATE_OWASP
+            else -> ReportSnippetFormatter.TEMPLATE_DEFAULT
+        }
         config.useBurpHttpApi = useBurpHttpApiCheck.isSelected
         config.proactiveSuggestionsEnabled = proactiveSuggestionsCheck.isSelected
         config.systemPromptExplain = systemPromptField.text.ifBlank { SecurityPrompts.DEFAULT_EXPLAIN_SELECTION }
@@ -733,6 +750,10 @@ class OllamaSettingsPanel(
         timeoutField.text = config.timeoutSeconds.toString()
         numCtxField.text = config.numCtx.toString()
         streamingCheck.isSelected = config.streaming
+        reportSnippetTemplateCombo.selectedIndex = when (config.reportSnippetTemplate) {
+            ReportSnippetFormatter.TEMPLATE_OWASP -> 1
+            else -> 0
+        }
         useBurpHttpApiCheck.isSelected = config.useBurpHttpApi
         proactiveSuggestionsCheck.isSelected = config.proactiveSuggestionsEnabled
         systemPromptField.text = config.systemPromptExplain

@@ -232,6 +232,11 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setString(key("loginPassword"), value)
         }
 
+    /** Report snippet template ID for "Copy as report snippet": default, owasp. */
+    var reportSnippetTemplate: String
+        get() = preferences.getString(key("reportSnippetTemplate")) ?: "default"
+        set(value) { preferences.setString(key("reportSnippetTemplate"), value) }
+
     /** Custom prompts library: "name\tprompt\nname2\tprompt2" */
     var customPrompts: String
         get() = preferences.getString(key("customPrompts")) ?: ""
@@ -252,8 +257,28 @@ class OllamaConfig(private val preferences: Preferences) {
         service.updateConfig(baseUrl, timeoutSeconds, useBurpHttpApi)
     }
 
+    /** Options for "System prompt" dropdown: (display label, system prompt text). "None" = empty string. */
+    fun systemPromptOptions(): List<Pair<String, String>> = listOf(
+        "None" to "",
+        "Default (Explain)" to systemPromptExplain,
+        "Explain headers" to systemPromptExplainHeaders,
+        "Analyze" to systemPromptAnalyze,
+        "Validate false positive" to systemPromptValidateFalsePositive,
+        "Decipher code" to systemPromptDecipher,
+        "Generate login" to systemPromptGenerateLogin,
+        "Intruder payloads" to systemPromptIntruderPayloads,
+        "Intruder attack type" to systemPromptIntruderAttackType,
+        "Intruder OOB" to systemPromptIntruderOobPayloads,
+        "Ask with instruction" to systemPromptAskWithInstruction,
+        "Explore issue" to systemPromptExploreIssue,
+        "Autonomous explore" to systemPromptAutonomousExplore,
+        "Chain refine" to systemPromptChainRefineForSelector(),
+    )
+
+    private fun systemPromptChainRefineForSelector(): String = chainRefinePrompt()
+
     companion object {
-        const val DEFAULT_MODEL = "llama3.2:3b"
-        const val DEFAULT_NUM_CTX = 4096
+        const val DEFAULT_MODEL = "huihui_ai/deepseek-r1-abliterated:14b"
+        const val DEFAULT_NUM_CTX = 32768
     }
 }

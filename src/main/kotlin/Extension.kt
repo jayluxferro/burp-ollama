@@ -7,6 +7,11 @@ import session.OllamaLoginSessionAction
 import ui.OllamaContextMenuProvider
 import ui.OllamaHttpRequestEditorProvider
 import ui.OllamaHttpResponseEditorProvider
+import ui.OllamaWebSocketMessageEditorProvider
+import intruder.OllamaPayloadGeneratorProvider
+import scanner.OllamaAuditIssueHandler
+import scanner.OllamaPassiveScanCheck
+import burp.api.montoya.scanner.scancheck.ScanCheckType
 import ui.OllamaBatchDialog
 import ui.OllamaResponseDialog
 import ui.StreamingDialogCallbacks
@@ -53,7 +58,7 @@ class Extension : BurpExtension {
 
         val frame = api.userInterface().swingUtils().suiteFrame()
         val showResponseDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
-            OllamaResponseDialog.show(frame, title, content, retry)
+            OllamaResponseDialog.show(frame, title, content, retry, config.reportSnippetTemplate)
         }
 
         val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?, ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)?) -> StreamingDialogCallbacks = { title, retry, withSendButtons, stopRequested, onFollowUp ->
@@ -76,14 +81,14 @@ class Extension : BurpExtension {
                     }
                 }
             } else null
-            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain, onFollowUp)
+            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain, onFollowUp, config.reportSnippetTemplate)
         }
 
         val showBatchDialog: (String, List<Pair<String, String>>, String, String) -> Unit = { title, items, systemPrompt, model ->
             OllamaBatchDialog.show(frame, title, items, systemPrompt, model, ollamaService, config)
         }
         val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
-            OllamaResponseDialog.show(frame, title, content, retry)
+            OllamaResponseDialog.show(frame, title, content, retry, config.reportSnippetTemplate)
         }
         val contextMenuProvider = OllamaContextMenuProvider(
             montoyaApi = api,
@@ -114,6 +119,10 @@ class Extension : BurpExtension {
             HotKeyContext.HTTP_MESSAGE_EDITOR,
             explainHotKey
         ) { event -> contextMenuProvider.handleExplainHotKey(event) }
+        val quickPromptHotKey = HotKey.hotKey("Quick prompt (Ollama)", "Ctrl+Alt+O")
+        api.userInterface().registerHotKeyHandler(quickPromptHotKey) {
+            OllamaQuickPromptDialog.show(frame, api, config, ollamaService, showErrorDialog)
+        }
         api.http().registerHttpHandler(OllamaProactiveHandler { config.proactiveSuggestionsEnabled })
         api.userInterface().registerHttpRequestEditorProvider(
             OllamaHttpRequestEditorProvider(api, config, ollamaService, showErrorDialog)
@@ -121,10 +130,16 @@ class Extension : BurpExtension {
         api.userInterface().registerHttpResponseEditorProvider(
             OllamaHttpResponseEditorProvider(api, config, ollamaService, showErrorDialog)
         )
+        api.userInterface().registerWebSocketMessageEditorProvider(
+            OllamaWebSocketMessageEditorProvider(api, config, ollamaService, showErrorDialog)
+        )
+        api.intruder().registerPayloadGeneratorProvider(OllamaPayloadGeneratorProvider())
+        api.scanner().registerAuditIssueHandler(OllamaAuditIssueHandler(api))
+        api.scanner().registerPassiveScanCheck(OllamaPassiveScanCheck(), ScanCheckType.PER_REQUEST)
         api.userInterface().applyThemeToComponent(settingsPanel)
 
         api.extension().registerUnloadingHandler { ollamaService.shutdown() }
 
-        api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text, or Ctrl+Shift+E to explain.")
+        api.logging().logToOutput("Burp Ollama loaded. Use right-click > Ask Ollama on selected text, Ctrl+Shift+E to explain, Ctrl+Alt+O for quick prompt.")
     }
 }

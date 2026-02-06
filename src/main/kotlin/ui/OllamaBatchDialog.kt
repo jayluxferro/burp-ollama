@@ -39,7 +39,10 @@ class OllamaBatchDialog(
 
     private val tabbedPane = JTabbedPane()
     private val loadingPanel = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
-        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
         add(JProgressBar().apply { isIndeterminate = true })
         add(javax.swing.JLabel("Processing…"))
         isVisible = false

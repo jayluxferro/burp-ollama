@@ -59,10 +59,28 @@ class OllamaSuiteTab(
         isEditable = true
         addItem(config.modelSuite.ifBlank { config.model })
     }
+    private val chatSystemPromptCombo = JComboBox<String>().apply {
+        toolTipText = "System prompt for this request. None = only your payload + question."
+    }
     private val askButton = JButton("Ask Ollama").apply {
-        toolTipText = "Send prompt to Ollama"
+        toolTipText = "Send prompt to Ollama (Ctrl+Enter)"
+        font = UiConstants.primaryButtonFont(font)
     }
     private val responseArea = MarkdownTextPane(20, 60)
+    private val chatFollowUpField = JTextArea(2, 40).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        margin = Insets(4, 6, 4, 6)
+        preferredSize = Dimension(400, 44)
+        minimumSize = Dimension(200, 44)
+        maximumSize = Dimension(600, 120)
+        toolTipText = "Type follow-up here, then click Send or press Ctrl+Enter."
+    }
+    private val chatFollowUpSendButton = JButton("Send").apply {
+        toolTipText = "Send follow-up (or press Ctrl+Enter in the field above)"
+        font = UiConstants.primaryButtonFont(font)
+        isEnabled = false
+    }
     private val sendToRepeaterButton = JButton("Send to Repeater").apply {
         toolTipText = "Send detected HTTP request(s) from response to Repeater"
         isEnabled = false
@@ -82,8 +100,15 @@ class OllamaSuiteTab(
         toolTipText = "Copy formatted for vulnerability reports"
         isEnabled = false
     }
+    private val exportChatButton = JButton("Export conversation").apply {
+        toolTipText = "Save current chat branch as Markdown file"
+        isEnabled = false
+    }
     private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
-        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Querying Ollama…"))
         isVisible = false
@@ -134,12 +159,16 @@ class OllamaSuiteTab(
     }
     private val compareButton = JButton("Compare models").apply {
         toolTipText = "Send same prompt to selected models in parallel"
+        font = UiConstants.primaryButtonFont(font)
     }
     private val compareResultTabs = JTabbedPane().apply {
         toolTipText = "Responses from each model"
     }
     private val compareLoadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
-        border = EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
         add(JProgressBar().apply { isIndeterminate = true })
         add(JLabel("Comparing models…"))
         isVisible = false
@@ -147,13 +176,29 @@ class OllamaSuiteTab(
     private val compareExportButton = JButton("Export").apply {
         toolTipText = "Export comparison as Markdown to clipboard"
     }
+    private val compareFollowUpField = JTextArea(2, 40).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        margin = Insets(4, 6, 4, 6)
+        preferredSize = Dimension(400, 44)
+        minimumSize = Dimension(200, 44)
+        maximumSize = Dimension(600, 120)
+        toolTipText = "Type follow-up here, then click Send or press Ctrl+Enter to send to all models."
+    }
+    private val compareFollowUpButton = JButton("Send").apply {
+        toolTipText = "Send follow-up to all compared models (or press Ctrl+Enter in the field above)"
+        font = UiConstants.primaryButtonFont(font)
+        isEnabled = false
+    }
+    /** Per-model conversation history for Compare tab follow-ups. */
+    private val compareModelConversations = mutableMapOf<String, MutableList<Pair<String, String>>>()
 
     init {
         border = EmptyBorder(UiConstants.PANEL_PADDING)
         val chatInputPanel = JPanel(BorderLayout()).apply {
             border = CompoundBorder(
                 TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Your message — type here (Ctrl+Enter to send)", TitledBorder.LEADING, TitledBorder.TOP),
-                EmptyBorder(6, 6, 6, 6)
+                EmptyBorder(8, 8, 8, 8)
             )
         }
         chatInputPanel.add(JScrollPane(promptArea).apply {
@@ -165,21 +210,13 @@ class OllamaSuiteTab(
         }
         topPanel.add(JLabel("Ask Ollama — general queries. Use Repeater tab or right-click for context-aware analysis.").apply {
             border = EmptyBorder(0, 0, 8, 0)
+            toolTipText = "Type your question above, then Ask Ollama. Use Follow-up below for multi-turn conversation."
         }, BorderLayout.NORTH)
         topPanel.add(chatInputPanel, BorderLayout.CENTER)
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
         toolbar.add(modelCombo)
-        toolbar.add(JButton("Quick prompt").apply {
-            toolTipText = "Open compact dialog for one-off queries"
-            addActionListener {
-                OllamaQuickPromptDialog.show(
-                    javax.swing.SwingUtilities.getWindowAncestor(this@OllamaSuiteTab) as? java.awt.Frame,
-                    montoyaApi, config, ollamaService, showErrorDialog
-                )
-            }
-        })
         toolbar.add(JButton("Refresh").apply {
             toolTipText = "Refresh model list from Ollama"
             addActionListener {
@@ -202,6 +239,15 @@ class OllamaSuiteTab(
                 }
             }
         })
+        toolbar.add(JButton("Quick prompt").apply {
+            toolTipText = "Open compact dialog for one-off queries"
+            addActionListener {
+                OllamaQuickPromptDialog.show(
+                    javax.swing.SwingUtilities.getWindowAncestor(this@OllamaSuiteTab) as? java.awt.Frame,
+                    montoyaApi, config, ollamaService, showErrorDialog
+                )
+            }
+        })
         val branchCombo = JComboBox<String>().apply {
             toolTipText = "Switch between conversation branches"
             addItem("Main")
@@ -209,6 +255,7 @@ class OllamaSuiteTab(
                 val idx = selectedIndex
                 if (idx >= 0 && idx != currentBranchIndex && idx < branches.size) {
                     currentBranchIndex = idx
+                    chatFollowUpField.text = ""
                     refreshResponseArea()
                 }
             }
@@ -233,9 +280,14 @@ class OllamaSuiteTab(
                 branchCombo.removeAllItems()
                 branchCombo.addItem("Main")
                 branchCombo.selectedIndex = 0
+                chatFollowUpField.text = ""
                 refreshResponseArea()
             }
         }
+        toolbar.add(JLabel("System prompt:"))
+        config.systemPromptOptions().map { it.first }.forEach { chatSystemPromptCombo.addItem(it) }
+        chatSystemPromptCombo.selectedIndex = 1.coerceIn(0, chatSystemPromptCombo.itemCount - 1) // Default (Explain)
+        toolbar.add(chatSystemPromptCombo)
         toolbar.add(JLabel("Branch:"))
         toolbar.add(branchCombo)
         toolbar.add(newBranchButton)
@@ -246,7 +298,7 @@ class OllamaSuiteTab(
         val responsePanel = JPanel(BorderLayout()).apply {
             border = CompoundBorder(
                 TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Response", TitledBorder.LEADING, TitledBorder.TOP),
-                EmptyBorder(UiConstants.TOOLBAR_GAP, 6, 6, 6)
+                EmptyBorder(UiConstants.TOOLBAR_GAP, 8, 8, 8)
             )
         }
         val responseTop = JPanel(BorderLayout())
@@ -259,9 +311,19 @@ class OllamaSuiteTab(
         responseToolbar.add(sendToOrganizerButton)
         responseToolbar.add(copyButton)
         responseToolbar.add(copyReportButton)
+        responseToolbar.add(exportChatButton)
         responseTop.add(responseToolbar, BorderLayout.CENTER)
         responsePanel.add(responseTop, BorderLayout.NORTH)
         responsePanel.add(JScrollPane(responseArea).apply { minimumSize = Dimension(100, 150) }, BorderLayout.CENTER)
+        val chatFollowUpRow = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 4)).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
+        chatFollowUpRow.add(JLabel("Follow-up:"))
+        chatFollowUpRow.add(JScrollPane(chatFollowUpField).apply {
+            border = UiConstants.inputFieldBorder()
+        })
+        chatFollowUpRow.add(chatFollowUpSendButton)
+        responsePanel.add(chatFollowUpRow, BorderLayout.SOUTH)
 
         val chatPanel = JPanel(BorderLayout())
         chatPanel.add(JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, responsePanel).apply {
@@ -386,13 +448,14 @@ class OllamaSuiteTab(
         compareToolbar.add(JScrollPane(compareModelList).apply {
             preferredSize = Dimension(220, 85)
             minimumSize = Dimension(180, 70)
-            border = CompoundBorder(EtchedBorder(EtchedBorder.LOWERED), EmptyBorder(2, 2, 2, 2))
+            border = UiConstants.inputFieldBorder()
+        })
+        compareToolbar.add(JButton("Refresh").apply {
+            toolTipText = "Refresh model list from Ollama"
+            addActionListener { refreshCompareModelList() }
         })
         compareToolbar.add(compareButton)
         compareToolbar.add(compareExportButton)
-        compareToolbar.add(JButton("Refresh").apply {
-            addActionListener { refreshCompareModelList() }
-        })
         compareConfigSection.add(compareToolbar, BorderLayout.CENTER)
         // Stack: prompt section (type here) | visual break | config section (models & buttons)
         val compareTopStack = JPanel(BorderLayout()).apply {
@@ -414,6 +477,15 @@ class OllamaSuiteTab(
         }
         compareResultPanel.add(compareLoadingPanel, BorderLayout.NORTH)
         compareResultPanel.add(compareResultTabs.apply { minimumSize = Dimension(200, 150) }, BorderLayout.CENTER)
+        val compareFollowUpRow = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 4)).apply {
+            border = EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0)
+        }
+        compareFollowUpRow.add(JLabel("Follow-up:"))
+        compareFollowUpRow.add(JScrollPane(compareFollowUpField).apply {
+            border = UiConstants.inputFieldBorder()
+        })
+        compareFollowUpRow.add(compareFollowUpButton)
+        compareResultPanel.add(compareFollowUpRow, BorderLayout.SOUTH)
         comparePanel.add(compareResultPanel, BorderLayout.CENTER)
 
         tabbedPane = JTabbedPane()
@@ -425,13 +497,16 @@ class OllamaSuiteTab(
         add(tabbedPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
+        chatFollowUpSendButton.addActionListener { onAskOllama() }
         compareButton.addActionListener { onCompareModels() }
         compareExportButton.addActionListener { onExportCompare() }
+        compareFollowUpButton.addActionListener { onCompareFollowUp() }
         sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
         sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
         sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
         copyButton.addActionListener { onCopy() }
         copyReportButton.addActionListener { onCopyReport() }
+        exportChatButton.addActionListener { onExportChat() }
 
         promptArea.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
             KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "askOllama"
@@ -443,6 +518,30 @@ class OllamaSuiteTab(
             override fun insertUpdate(e: DocumentEvent) { updateAskButtonState() }
             override fun removeUpdate(e: DocumentEvent) { updateAskButtonState() }
             override fun changedUpdate(e: DocumentEvent) { updateAskButtonState() }
+        })
+        chatFollowUpField.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "askOllama"
+        )
+        chatFollowUpField.actionMap.put("askOllama", object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) { onAskOllama() }
+        })
+        chatFollowUpField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) { updateAskButtonState() }
+            override fun removeUpdate(e: DocumentEvent) { updateAskButtonState() }
+            override fun changedUpdate(e: DocumentEvent) { updateAskButtonState() }
+        })
+        compareFollowUpField.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "compareFollowUp"
+        )
+        compareFollowUpField.actionMap.put("compareFollowUp", object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                if (compareFollowUpButton.isEnabled) onCompareFollowUp()
+            }
+        })
+        compareFollowUpField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) { updateCompareFollowUpButton() }
+            override fun removeUpdate(e: DocumentEvent) { updateCompareFollowUpButton() }
+            override fun changedUpdate(e: DocumentEvent) { updateCompareFollowUpButton() }
         })
 
         OllamaTaskRegistry.addListener { refreshTaskList() }
@@ -502,24 +601,39 @@ class OllamaSuiteTab(
         }
     }
 
+    private fun selectedChatSystemPrompt(): String {
+        val options = config.systemPromptOptions()
+        val idx = chatSystemPromptCombo.selectedIndex.coerceIn(0, options.size - 1)
+        return options.getOrNull(idx)?.second ?: config.systemPromptExplain
+    }
+
     private fun onAskOllama() {
         config.applyTo(ollamaService)
         val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.modelSuite.ifBlank { config.model }).trim()
         val numCtx = config.numCtx
-        val systemPrompt = config.systemPromptExplain
+        val systemPrompt = selectedChatSystemPrompt()
 
-        val userMessage = promptArea.text.trim()
+        val userMessage = if (branches[currentBranchIndex].isEmpty()) {
+            promptArea.text.trim()
+        } else {
+            chatFollowUpField.text.trim()
+        }
         if (userMessage.isBlank()) return
+        if (branches[currentBranchIndex].isNotEmpty()) chatFollowUpField.text = ""
 
         val taskId = OllamaTaskRegistry.addTask(userMessage, "Suite tab")
         val messages = buildMessages(systemPrompt, userMessage)
-        responseArea.text = ""
+        val isFollowUp = branches[currentBranchIndex].isNotEmpty()
+        if (!isFollowUp) responseArea.text = ""
+        else responseArea.append("\n---\n")
         setLoading(true)
 
         fun doRequest() {
             if (config.streaming) {
+                val newReplyAccumulator = StringBuilder()
                 ollamaService.chatStreamWithMessagesAsync(model, messages, numCtx) { chunk ->
                     SwingUtilities.invokeLater {
+                        newReplyAccumulator.append(chunk)
                         responseArea.append(chunk)
                         updateCopyButtonState()
                         val scrollPane = responseArea.parent?.parent as? JScrollPane
@@ -530,10 +644,10 @@ class OllamaSuiteTab(
                         setLoading(false)
                         result.fold(
                             onSuccess = {
-                                branches[currentBranchIndex].add(userMessage to responseArea.text)
+                                branches[currentBranchIndex].add(userMessage to newReplyAccumulator.toString())
                                 updateSendButtons()
                                 updateAskButtonState()
-                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, responseArea.text)
+                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, newReplyAccumulator.toString())
                             },
                             onFailure = { err ->
                                 val msg = OllamaErrorFormatter.format(err, config.baseUrl, config.model)
@@ -550,7 +664,6 @@ class OllamaSuiteTab(
                             setLoading(false)
                             result.fold(
                                 onSuccess = { response ->
-                                    if (branches[currentBranchIndex].isNotEmpty()) responseArea.append("\n---\n")
                                     responseArea.append(response)
                                     branches[currentBranchIndex].add(userMessage to response)
                                     updateSendButtons()
@@ -586,7 +699,11 @@ class OllamaSuiteTab(
             messages.add(ollama.ChatMessage(role = "user", content = user))
             messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
         }
-        messages.add(ollama.ChatMessage(role = "user", content = newUserMessage))
+        val userContent = if (branches[currentBranchIndex].isNotEmpty())
+            "Regarding our conversation above: $newUserMessage"
+        else
+            newUserMessage
+        messages.add(ollama.ChatMessage(role = "user", content = userContent))
         return messages
     }
 
@@ -600,13 +717,50 @@ class OllamaSuiteTab(
     }
 
     private fun updateAskButtonState() {
-        askButton.isEnabled = promptArea.text.trim().isNotBlank()
+        val hasPrompt = promptArea.text.trim().isNotBlank()
+        val hasFollowUp = chatFollowUpField.text.trim().isNotBlank()
+        val hasHistory = branches.getOrNull(currentBranchIndex)?.isNotEmpty() == true
+        askButton.isEnabled = hasPrompt || (hasHistory && hasFollowUp)
+        chatFollowUpSendButton.isEnabled = hasHistory && hasFollowUp
     }
 
     private fun updateCopyButtonState() {
         val hasContent = responseArea.text.isNotBlank()
         copyButton.isEnabled = hasContent
         copyReportButton.isEnabled = hasContent
+        exportChatButton.isEnabled = (branches.getOrNull(currentBranchIndex)?.isNotEmpty() == true)
+    }
+
+    private fun onExportChat() {
+        val branch = branches.getOrNull(currentBranchIndex) ?: return
+        if (branch.isEmpty()) return
+        val chooser = javax.swing.JFileChooser().apply {
+            dialogTitle = "Export conversation"
+            selectedFile = java.io.File("ollama-chat-export.md")
+        }
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return
+        val file = chooser.selectedFile ?: return
+        val markdown = buildString {
+            append("# Ollama Chat Export\n\n")
+            for ((user, assistant) in branch) {
+                append("## User\n\n")
+                append(user.trim())
+                append("\n\n## Assistant\n\n")
+                append(assistant.trim())
+                append("\n\n---\n\n")
+            }
+        }
+        try {
+            file.writeText(markdown)
+            showCopiedFeedback(exportChatButton)
+            exportChatButton.text = "Exported!"
+            javax.swing.Timer(1500) { evt ->
+                exportChatButton.text = "Export conversation"
+                (evt.source as? javax.swing.Timer)?.stop()
+            }.start()
+        } catch (e: Exception) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Export failed: ${e.message}", "Export", javax.swing.JOptionPane.ERROR_MESSAGE)
+        }
     }
 
     private fun onCopy() {
@@ -620,7 +774,7 @@ class OllamaSuiteTab(
     private fun onCopyReport() {
         val text = responseArea.text
         if (text.isNotBlank()) {
-            val snippet = buildReportSnippet(text)
+            val snippet = ReportSnippetFormatter.format(text, config.reportSnippetTemplate)
             Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(snippet), null)
             showCopiedFeedback(copyReportButton)
         }
@@ -633,12 +787,6 @@ class OllamaSuiteTab(
             button.text = orig
             (evt.source as? javax.swing.Timer)?.stop()
         }.start()
-    }
-
-    private fun buildReportSnippet(text: String): String = buildString {
-        append("## AI-Assisted Analysis\n\n")
-        append(text.trim())
-        append("\n\n---\n*Generated by Burp Ollama*")
     }
 
     private fun sendDetectedRequestsToRepeater() {
@@ -714,8 +862,10 @@ class OllamaSuiteTab(
         val systemPrompt = config.systemPromptExplain
 
         compareResultTabs.removeAll()
+        compareModelConversations.clear()
         setCompareLoading(true)
         compareButton.isEnabled = false
+        compareFollowUpButton.isEnabled = false
 
         val futures = models.map { model ->
             ollamaService.chatAsync(model, systemPrompt, userMessage, numCtx)
@@ -726,6 +876,7 @@ class OllamaSuiteTab(
                             onSuccess = { cr ->
                                 val usage = if (cr.promptTokens != null && cr.evalTokens != null) "\n\n---\nTokens: ${cr.promptTokens} in, ${cr.evalTokens} out" else ""
                                 textArea.text = cr.content + usage
+                                compareModelConversations[model] = mutableListOf(userMessage to cr.content)
                             },
                             onFailure = { textArea.text = "Error: ${OllamaErrorFormatter.format(it, config.baseUrl, model)}" }
                         )
@@ -738,6 +889,7 @@ class OllamaSuiteTab(
             SwingUtilities.invokeLater {
                 setCompareLoading(false)
                 compareButton.isEnabled = true
+                compareFollowUpButton.isEnabled = compareModelConversations.isNotEmpty()
                 if (models.size == 2) {
                     val textA = (compareResultTabs.getComponentAt(0) as? JScrollPane)?.viewport?.view?.let { v ->
                         when (v) {
@@ -768,6 +920,101 @@ class OllamaSuiteTab(
 
     private fun setCompareLoading(loading: Boolean) {
         compareLoadingPanel.isVisible = loading
+    }
+
+    private fun updateCompareFollowUpButton() {
+        val hasFollowUp = compareFollowUpField.text.trim().isNotBlank()
+        val hasResults = compareModelConversations.isNotEmpty()
+        compareFollowUpButton.isEnabled = hasFollowUp && hasResults && !compareLoadingPanel.isVisible
+    }
+
+    private fun onCompareFollowUp() {
+        val followUp = compareFollowUpField.text.trim()
+        if (followUp.isBlank()) return
+        if (compareModelConversations.isEmpty()) return
+
+        config.applyTo(ollamaService)
+        val numCtx = config.numCtx
+        val systemPrompt = config.systemPromptExplain
+        val followUpWithContext = "Regarding our conversation above: $followUp"
+
+        compareFollowUpField.text = ""
+        setCompareLoading(true)
+        compareFollowUpButton.isEnabled = false
+        compareButton.isEnabled = false
+
+        val models = compareModelConversations.keys.toList()
+        val futures = models.map { model ->
+            val history = compareModelConversations[model]!!
+            val messages = mutableListOf<ollama.ChatMessage>()
+            if (systemPrompt.isNotBlank()) {
+                messages.add(ollama.ChatMessage(role = "system", content = systemPrompt))
+            }
+            for ((user, assistant) in history) {
+                messages.add(ollama.ChatMessage(role = "user", content = user))
+                messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
+            }
+            messages.add(ollama.ChatMessage(role = "user", content = followUpWithContext))
+
+            ollamaService.chatWithMessagesAsync(model, messages, numCtx)
+                .thenAccept { result ->
+                    SwingUtilities.invokeLater {
+                        val tabIdx = compareResultTabs.indexOfTab(model)
+                        if (tabIdx >= 0) {
+                            val comp = compareResultTabs.getComponentAt(tabIdx)
+                            val textArea = (comp as? JScrollPane)?.viewport?.view as? MarkdownTextPane
+                            if (textArea != null) {
+                                result.fold(
+                                    onSuccess = { response ->
+                                        textArea.append("\n---\n")
+                                        textArea.append(response)
+                                        history.add(followUpWithContext to response)
+                                    },
+                                    onFailure = { err ->
+                                        textArea.append("\n---\nError: ${OllamaErrorFormatter.format(err, config.baseUrl, model)}")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+        }
+
+        CompletableFuture.allOf(*futures.toTypedArray()).thenAccept {
+            SwingUtilities.invokeLater {
+                setCompareLoading(false)
+                compareButton.isEnabled = true
+                updateCompareFollowUpButton()
+                if (models.size == 2) {
+                    val textA = (compareResultTabs.getComponentAt(0) as? JScrollPane)?.viewport?.view?.let { v ->
+                        when (v) {
+                            is JTextArea -> v.text
+                            is MarkdownTextPane -> v.text
+                            else -> ""
+                        }
+                    } ?: ""
+                    val textB = (compareResultTabs.getComponentAt(1) as? JScrollPane)?.viewport?.view?.let { v ->
+                        when (v) {
+                            is JTextArea -> v.text
+                            is MarkdownTextPane -> v.text
+                            else -> ""
+                        }
+                    } ?: ""
+                    val diffIdx = compareResultTabs.indexOfTab("Diff")
+                    if (diffIdx >= 0) {
+                        compareResultTabs.removeTabAt(diffIdx)
+                    }
+                    val diffText = SimpleDiff.diff(textA, textB, models[0], models[1])
+                    val diffArea = JTextArea(15, 50).apply {
+                        isEditable = false
+                        lineWrap = false
+                        font = java.awt.Font("Monospaced", java.awt.Font.PLAIN, font.size)
+                    }
+                    diffArea.text = diffText
+                    compareResultTabs.addTab("Diff", JScrollPane(diffArea))
+                }
+            }
+        }
     }
 
     private fun onExportCompare() {

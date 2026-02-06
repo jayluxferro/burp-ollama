@@ -1,6 +1,7 @@
 package ui
 
 import java.awt.Color
+import javax.swing.UIManager
 import javax.swing.text.StyleConstants
 import javax.swing.text.DefaultStyledDocument
 import javax.swing.text.SimpleAttributeSet
@@ -8,7 +9,8 @@ import javax.swing.text.StyledDocument
 
 /**
  * Applies markdown code block styling to a StyledDocument.
- * Parses ```...``` blocks and renders them with monospace font and light background.
+ * Parses ```...``` blocks and renders them with monospace font and subtle background.
+ * Uses theme-aware colors when available for dark/light mode compatibility.
  */
 object MarkdownCodeBlockStyler {
 
@@ -17,11 +19,19 @@ object MarkdownCodeBlockStyler {
 
     private val normalAttributes = SimpleAttributeSet()
 
-    private val codeBlockAttributes = SimpleAttributeSet().apply {
-        StyleConstants.setFontFamily(this, "Monospaced")
-        StyleConstants.setFontSize(this, 12)
-        StyleConstants.setBackground(this, Color(0xf5f5f5))
-        StyleConstants.setForeground(this, Color(0x333333))
+    private val codeBlockAttributes: SimpleAttributeSet by lazy {
+        val bg = UIManager.getColor("TextField.inactiveBackground")
+            ?: UIManager.getColor("Panel.background")
+            ?: Color(0xf0f0f0)
+        val fg = UIManager.getColor("TextField.foreground")
+            ?: UIManager.getColor("Label.foreground")
+            ?: Color(0x333333)
+        SimpleAttributeSet().apply {
+            StyleConstants.setFontFamily(this, "Monospaced")
+            StyleConstants.setFontSize(this, 12)
+            StyleConstants.setBackground(this, bg)
+            StyleConstants.setForeground(this, fg)
+        }
     }
 
     /**
