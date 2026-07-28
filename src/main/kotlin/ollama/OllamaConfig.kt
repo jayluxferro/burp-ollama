@@ -118,6 +118,12 @@ class OllamaConfig(private val preferences: Preferences) {
             preferences.setBoolean(key("proactiveSuggestionsEnabled"), value)
         }
 
+    var passiveScanEnabled: Boolean
+        get() = preferences.getBoolean(key("passiveScanEnabled")) ?: false
+        set(value) {
+            preferences.setBoolean(key("passiveScanEnabled"), value)
+        }
+
     var systemPromptExplain: String
         get() = preferences.getString(key("systemPromptExplain")) ?: SecurityPrompts.DEFAULT_EXPLAIN_SELECTION
         set(value) {
@@ -253,8 +259,27 @@ class OllamaConfig(private val preferences: Preferences) {
         customPrompts = prompts.joinToString("\n") { (n, p) -> "$n\t$p" }
     }
 
+    var temperature: Double?
+        get() = preferences.getString(key("temperature"))?.toDoubleOrNull()
+        set(value) { preferences.setString(key("temperature"), value?.toString() ?: "") }
+
+    var topP: Double?
+        get() = preferences.getString(key("topP"))?.toDoubleOrNull()
+        set(value) { preferences.setString(key("topP"), value?.toString() ?: "") }
+
+    var numPredict: Int?
+        get() = preferences.getString(key("numPredict"))?.toIntOrNull()
+        set(value) { preferences.setString(key("numPredict"), value?.toString() ?: "") }
+
     fun applyTo(service: OllamaService) {
-        service.updateConfig(baseUrl, timeoutSeconds, useBurpHttpApi)
+        service.updateConfig(
+            baseUrl = baseUrl,
+            timeoutSeconds = timeoutSeconds,
+            useBurpHttpApi = useBurpHttpApi,
+            temperature = temperature,
+            topP = topP,
+            numPredict = numPredict
+        )
     }
 
     /** Options for "System prompt" dropdown: (display label, system prompt text). "None" = empty string. */
@@ -278,7 +303,8 @@ class OllamaConfig(private val preferences: Preferences) {
     private fun systemPromptChainRefineForSelector(): String = chainRefinePrompt()
 
     companion object {
-        const val DEFAULT_MODEL = "huihui_ai/deepseek-r1-abliterated:14b"
+        /** No hardcoded default model — the user must configure one in Settings. */
+        const val DEFAULT_MODEL = ""
         const val DEFAULT_NUM_CTX = 32768
     }
 }

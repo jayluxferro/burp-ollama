@@ -250,23 +250,7 @@ class OllamaQuickPromptDialog(
     }
 
     private fun refreshModelCombo() {
-        config.applyTo(ollamaService)
-        ollamaService.execute {
-            val models = ollamaService.listModels()
-            if (models.isSuccess) {
-                SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString()?.trim() ?: config.model)
-                    val list = models.getOrNull() ?: emptyList()
-                    val items = if (list.isEmpty()) listOf(current) else {
-                        val mutable = list.toMutableList()
-                        if (!mutable.contains(current)) mutable.add(0, current)
-                        mutable
-                    }
-                    modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                    modelCombo.selectedItem = current
-                }
-            }
-        }
+        ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, config.modelSuite.ifBlank { config.model })
     }
 
     companion object {

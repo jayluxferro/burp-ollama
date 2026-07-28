@@ -58,7 +58,7 @@ class Extension : BurpExtension {
 
         val frame = api.userInterface().swingUtils().suiteFrame()
         val showResponseDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
-            OllamaResponseDialog.show(frame, title, content, retry, config.reportSnippetTemplate)
+            OllamaResponseDialog.show(frame, title, content, retry, reportSnippetTemplate = config.reportSnippetTemplate, fallbackModel = config.model)
         }
 
         val showStreamingResponseDialog: (String, ((String?) -> Unit)?, Boolean, AtomicBoolean?, ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)?) -> StreamingDialogCallbacks = { title, retry, withSendButtons, stopRequested, onFollowUp ->
@@ -81,14 +81,14 @@ class Extension : BurpExtension {
                     }
                 }
             } else null
-            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain, onFollowUp, config.reportSnippetTemplate)
+            OllamaResponseDialog.showStreaming(frame, title, retry, if (withSendButtons) api else null, stopRequested, onRefineWithChain, onFollowUp, config.reportSnippetTemplate, config.model)
         }
 
         val showBatchDialog: (String, List<Pair<String, String>>, String, String) -> Unit = { title, items, systemPrompt, model ->
             OllamaBatchDialog.show(frame, title, items, systemPrompt, model, ollamaService, config)
         }
         val showErrorDialog: (String, String, () -> Unit) -> Unit = { title, content, retry ->
-            OllamaResponseDialog.show(frame, title, content, retry, config.reportSnippetTemplate)
+            OllamaResponseDialog.show(frame, title, content, retry, reportSnippetTemplate = config.reportSnippetTemplate, fallbackModel = config.model)
         }
         val contextMenuProvider = OllamaContextMenuProvider(
             montoyaApi = api,
@@ -135,7 +135,9 @@ class Extension : BurpExtension {
         )
         api.intruder().registerPayloadGeneratorProvider(OllamaPayloadGeneratorProvider())
         api.scanner().registerAuditIssueHandler(OllamaAuditIssueHandler(api))
-        api.scanner().registerPassiveScanCheck(OllamaPassiveScanCheck(), ScanCheckType.PER_REQUEST)
+        if (config.passiveScanEnabled) {
+            api.scanner().registerPassiveScanCheck(OllamaPassiveScanCheck(), ScanCheckType.PER_REQUEST)
+        }
         api.userInterface().applyThemeToComponent(settingsPanel)
 
         api.extension().registerUnloadingHandler { ollamaService.shutdown() }

@@ -3,8 +3,8 @@ package ollama
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.requests.HttpRequest
+import kotlinx.serialization.encodeToString
 import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest as JdkHttpRequest
@@ -24,20 +24,36 @@ class OllamaService(
     private var baseUrl: String = DEFAULT_BASE_URL,
     private var timeoutSeconds: Int = DEFAULT_TIMEOUT,
     private var montoyaApi: MontoyaApi? = null,
-    private var useBurpHttpApi: Boolean = false
+    private var useBurpHttpApi: Boolean = false,
+    private var temperature: Double? = null,
+    private var topP: Double? = null,
+    private var numPredict: Int? = null
 ) {
-    private val executor: ExecutorService = Executors.newFixedThreadPool(4)
+    private var executor: ExecutorService = Executors.newFixedThreadPool(4)
+    private var client: HttpClient = buildClient()
+    private val json get() = OllamaResponseParser.json
 
-    private val client: HttpClient by lazy {
-        HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
+    private fun buildClient(): HttpClient {
+        return HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(timeoutSeconds.toLong()))
             .build()
     }
 
-    fun updateConfig(baseUrl: String, timeoutSeconds: Int, useBurpHttpApi: Boolean = false) {
+    fun updateConfig(
+        baseUrl: String,
+        timeoutSeconds: Int,
+        useBurpHttpApi: Boolean = false,
+        temperature: Double? = null,
+        topP: Double? = null,
+        numPredict: Int? = null
+    ) {
         this.baseUrl = baseUrl.trimEnd('/')
         this.timeoutSeconds = timeoutSeconds
         this.useBurpHttpApi = useBurpHttpApi
+        this.temperature = temperature
+        this.topP = topP
+        this.numPredict = numPredict
+        this.client = buildClient()
     }
 
     fun setMontoyaApi(api: MontoyaApi?) {
@@ -125,6 +141,21 @@ class OllamaService(
         }
     }
 
+    private fun buildOptions(numCtx: Int? = null): ChatOptions? {
+        val hasCtx = numCtx != null
+        val hasTemperature = temperature != null
+        val hasTopP = topP != null
+        val hasNumPredict = numPredict != null
+        return if (hasCtx || hasTemperature || hasTopP || hasNumPredict) {
+            ChatOptions(
+                numCtx = numCtx,
+                temperature = temperature,
+                topP = topP,
+                numPredict = numPredict
+            )
+        } else null
+    }
+
     /**
      * Send chat request (sync, non-streaming).
      */
@@ -141,7 +172,7 @@ class OllamaService(
             }
             messages.add(ChatMessage(role = "user", content = userMessage))
 
-            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val options = buildOptions(numCtx)
             val requestBody = ChatRequest(
                 model = model,
                 messages = messages,
@@ -149,15 +180,15 @@ class OllamaService(
                 options = options
             )
 
-            val json = toJson(requestBody)
-            val (statusCode, body) = when {
-                useBurpHttpApi -> sendViaBurp("/api/chat", json).getOrElse { return Result.failure(it) }
+            val body = json.encodeToString(requestBody)
+            val (statusCode, responseBody) = when {
+                useBurpHttpApi -> sendViaBurp("/api/chat", body).getOrElse { return Result.failure(it) }
                 else -> {
                     val req = JdkHttpRequest.newBuilder()
                         .uri(URI.create("$baseUrl/api/chat"))
                         .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
                         .header("Content-Type", "application/json")
-                        .POST(JdkHttpRequest.BodyPublishers.ofString(json))
+                        .POST(JdkHttpRequest.BodyPublishers.ofString(body))
                         .build()
                     val resp = client.send(req, HttpResponse.BodyHandlers.ofString())
                     if (resp.statusCode() !in 200..299) {
@@ -167,9 +198,9 @@ class OllamaService(
                 }
             }
             if (statusCode !in 200..299) {
-                return Result.failure(OllamaException("Ollama returned $statusCode: $body"))
+                return Result.failure(OllamaException("Ollama returned $statusCode: $responseBody"))
             }
-            val chatResp = OllamaResponseParser.parseChatResponse(body)
+            val chatResp = OllamaResponseParser.parseChatResponse(responseBody)
             val content = chatResp.message?.content
             when {
                 chatResp.error != null -> Result.failure(OllamaException(chatResp.error))
@@ -229,6 +260,29 @@ class OllamaService(
     }
 
     /**
+     * Run a task on the background executor with error handling.
+     * Exceptions are logged and optionally passed to an onError callback.
+     */
+    fun executeSafe(task: () -> Unit, onError: ((Throwable) -> Unit)? = null) {
+        executor.execute {
+            try {
+                task()
+            } catch (e: Exception) {
+                onError?.invoke(e)
+                montoyaApi?.logging()?.logToError("Ollama background task failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Cancel all running requests and reset the executor.
+     */
+    fun cancelRunningRequests() {
+        executor.shutdownNow()
+        executor = Executors.newFixedThreadPool(4)
+    }
+
+    /**
      * Shutdown the executor. Call when extension unloads (BApp Store requirement).
      */
     fun shutdown() {
@@ -250,6 +304,9 @@ class OllamaService(
     /**
      * Send streaming chat request. Invokes onChunk for each content piece.
      * onChunk may be called from a background thread; caller should use SwingUtilities.invokeLater for UI updates.
+     *
+     * When [useBurpHttpApi] is enabled, true streaming is not supported by the Burp HTTP API —
+     * the entire response is buffered first, then parsed line-by-line. A warning is logged.
      */
     fun chatStream(
         model: String,
@@ -265,7 +322,7 @@ class OllamaService(
             }
             messages.add(ChatMessage(role = "user", content = userMessage))
 
-            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val options = buildOptions(numCtx)
             val requestBody = ChatRequest(
                 model = model,
                 messages = messages,
@@ -273,45 +330,55 @@ class OllamaService(
                 options = options
             )
 
-            val json = toJson(requestBody)
-            val responseBody = when {
+            val body = json.encodeToString(requestBody)
+            when {
                 useBurpHttpApi -> {
-                    val result = sendViaBurp("/api/chat", json)
-                    val (code, body) = result.getOrElse { return Result.failure(it) }
-                    if (code !in 200..299) return Result.failure(OllamaException("Ollama returned $code: $body"))
-                    body
+                    montoyaApi?.logging()?.logToOutput(
+                        "Ollama: streaming is not supported via Burp HTTP API; falling back to full response buffering"
+                    )
+                    val result = sendViaBurp("/api/chat", body)
+                    val (code, responseBody) = result.getOrElse { return Result.failure(it) }
+                    if (code !in 200..299) return Result.failure(OllamaException("Ollama returned $code: $responseBody"))
+                    responseBody.lines().forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty()) return@forEach
+                        val chatResp = json.decodeFromString<ChatResponse>(trimmed)
+                        if (chatResp.error != null) return Result.failure(OllamaException(chatResp.error))
+                        val content = chatResp.message?.content
+                        if (!content.isNullOrEmpty()) onChunk(content)
+                    }
+                    Result.success(Unit)
                 }
                 else -> {
                     val req = JdkHttpRequest.newBuilder()
                         .uri(URI.create("$baseUrl/api/chat"))
                         .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
                         .header("Content-Type", "application/json")
-                        .POST(JdkHttpRequest.BodyPublishers.ofString(json))
+                        .POST(JdkHttpRequest.BodyPublishers.ofString(body))
                         .build()
                     val resp = client.send(req, HttpResponse.BodyHandlers.ofInputStream())
                     if (resp.statusCode() !in 200..299) {
-                        val body = resp.body().reader().readText()
-                        return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: $body"))
+                        val errorBody = resp.body().reader().readText()
+                        return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: $errorBody"))
                     }
-                    resp.body().reader().readText()
+                    BufferedReader(resp.body().reader()).use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            val trimmed = line!!.trim()
+                            if (trimmed.isEmpty()) continue
+                            val chatResp = json.decodeFromString<ChatResponse>(trimmed)
+                            if (chatResp.error != null) {
+                                return Result.failure(OllamaException(chatResp.error))
+                            }
+                            val content = chatResp.message?.content
+                            if (!content.isNullOrEmpty()) {
+                                onChunk(content)
+                            }
+                        }
+                    }
+                    Result.success(Unit)
                 }
             }
-            BufferedReader(responseBody.reader()).use { reader ->
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    val trimmed = line!!.trim()
-                    if (trimmed.isEmpty()) continue
-                    val chatResp = OllamaResponseParser.parseChatResponse(trimmed)
-                    if (chatResp.error != null) {
-                        return Result.failure(OllamaException(chatResp.error))
-                    }
-                    val content = chatResp.message?.content
-                    if (!content.isNullOrEmpty()) {
-                        onChunk(content)
-                    }
-                }
-            }
-            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(OllamaException("Streaming chat failed: ${e.message}", e))
         }
@@ -327,7 +394,10 @@ class OllamaService(
         numCtx: Int? = null,
         onChunk: (String) -> Unit
     ): CompletableFuture<Result<Unit>> {
-        return CompletableFuture.supplyAsync({ chatStream(model, systemPrompt, userMessage, numCtx, onChunk) }, executor)
+        return CompletableFuture.supplyAsync(
+            { chatStream(model, systemPrompt, userMessage, numCtx, onChunk) },
+            executor
+        )
     }
 
     /**
@@ -340,22 +410,22 @@ class OllamaService(
     ): Result<String> {
         if (messages.isEmpty()) return Result.failure(OllamaException("No messages provided"))
         return try {
-            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val options = buildOptions(numCtx)
             val requestBody = ChatRequest(
                 model = model,
                 messages = messages,
                 stream = false,
                 options = options
             )
-            val json = toJson(requestBody)
-            val (statusCode, body) = when {
-                useBurpHttpApi -> sendViaBurp("/api/chat", json).getOrElse { return Result.failure(it) }
+            val body = json.encodeToString(requestBody)
+            val (statusCode, responseBody) = when {
+                useBurpHttpApi -> sendViaBurp("/api/chat", body).getOrElse { return Result.failure(it) }
                 else -> {
                     val req = JdkHttpRequest.newBuilder()
                         .uri(URI.create("$baseUrl/api/chat"))
                         .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
                         .header("Content-Type", "application/json")
-                        .POST(JdkHttpRequest.BodyPublishers.ofString(json))
+                        .POST(JdkHttpRequest.BodyPublishers.ofString(body))
                         .build()
                     val resp = client.send(req, HttpResponse.BodyHandlers.ofString())
                     if (resp.statusCode() !in 200..299) {
@@ -365,9 +435,9 @@ class OllamaService(
                 }
             }
             if (statusCode !in 200..299) {
-                return Result.failure(OllamaException("Ollama returned $statusCode: $body"))
+                return Result.failure(OllamaException("Ollama returned $statusCode: $responseBody"))
             }
-            val chatResp = OllamaResponseParser.parseChatResponse(body)
+            val chatResp = OllamaResponseParser.parseChatResponse(responseBody)
             val content = chatResp.message?.content
             when {
                 chatResp.error != null -> Result.failure(OllamaException(chatResp.error))
@@ -390,52 +460,62 @@ class OllamaService(
     ): Result<Unit> {
         if (messages.isEmpty()) return Result.failure(OllamaException("No messages provided"))
         return try {
-            val options = numCtx?.let { ChatOptions(num_ctx = it) }
+            val options = buildOptions(numCtx)
             val requestBody = ChatRequest(
                 model = model,
                 messages = messages,
                 stream = true,
                 options = options
             )
-            val json = toJson(requestBody)
-            val responseBody = when {
+            val body = json.encodeToString(requestBody)
+            when {
                 useBurpHttpApi -> {
-                    val result = sendViaBurp("/api/chat", json)
-                    val (code, body) = result.getOrElse { return Result.failure(it) }
-                    if (code !in 200..299) return Result.failure(OllamaException("Ollama returned $code: $body"))
-                    body
+                    montoyaApi?.logging()?.logToOutput(
+                        "Ollama: streaming is not supported via Burp HTTP API; falling back to full response buffering"
+                    )
+                    val result = sendViaBurp("/api/chat", body)
+                    val (code, responseBody) = result.getOrElse { return Result.failure(it) }
+                    if (code !in 200..299) return Result.failure(OllamaException("Ollama returned $code: $responseBody"))
+                    responseBody.lines().forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty()) return@forEach
+                        val chatResp = json.decodeFromString<ChatResponse>(trimmed)
+                        if (chatResp.error != null) return Result.failure(OllamaException(chatResp.error))
+                        val content = chatResp.message?.content
+                        if (!content.isNullOrEmpty()) onChunk(content)
+                    }
+                    Result.success(Unit)
                 }
                 else -> {
                     val req = JdkHttpRequest.newBuilder()
                         .uri(URI.create("$baseUrl/api/chat"))
                         .timeout(Duration.ofSeconds(timeoutSeconds.toLong()))
                         .header("Content-Type", "application/json")
-                        .POST(JdkHttpRequest.BodyPublishers.ofString(json))
+                        .POST(JdkHttpRequest.BodyPublishers.ofString(body))
                         .build()
                     val resp = client.send(req, HttpResponse.BodyHandlers.ofInputStream())
                     if (resp.statusCode() !in 200..299) {
-                        val body = resp.body().reader().readText()
-                        return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: $body"))
+                        val errorBody = resp.body().reader().readText()
+                        return Result.failure(OllamaException("Ollama returned ${resp.statusCode()}: $errorBody"))
                     }
-                    resp.body().reader().readText()
+                    BufferedReader(resp.body().reader()).use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            val trimmed = line!!.trim()
+                            if (trimmed.isEmpty()) continue
+                            val chatResp = json.decodeFromString<ChatResponse>(trimmed)
+                            if (chatResp.error != null) {
+                                return Result.failure(OllamaException(chatResp.error))
+                            }
+                            val content = chatResp.message?.content
+                            if (!content.isNullOrEmpty()) {
+                                onChunk(content)
+                            }
+                        }
+                    }
+                    Result.success(Unit)
                 }
             }
-            BufferedReader(responseBody.reader()).use { reader ->
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    val trimmed = line!!.trim()
-                    if (trimmed.isEmpty()) continue
-                    val chatResp = OllamaResponseParser.parseChatResponse(trimmed)
-                    if (chatResp.error != null) {
-                        return Result.failure(OllamaException(chatResp.error))
-                    }
-                    val content = chatResp.message?.content
-                    if (!content.isNullOrEmpty()) {
-                        onChunk(content)
-                    }
-                }
-            }
-            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(OllamaException("Streaming chat failed: ${e.message}", e))
         }
@@ -455,31 +535,6 @@ class OllamaService(
         onChunk: (String) -> Unit
     ): CompletableFuture<Result<Unit>> =
         CompletableFuture.supplyAsync({ chatStreamWithMessages(model, messages, numCtx, onChunk) }, executor)
-
-    private fun toJson(req: ChatRequest): String {
-        val messagesJson = req.messages.joinToString(",") { msg ->
-            val content = if (msg.content.isBlank()) " " else msg.content
-            """{"role":"${escapeJson(msg.role)}","content":"${escapeJson(content)}"}"""
-        }
-        val optionsJson = req.options?.let { o -> o.num_ctx?.let { ""","options":{"num_ctx":$it}""" } ?: "" } ?: ""
-        return """{"model":"${escapeJson(req.model)}","messages":[$messagesJson],"stream":${req.stream}$optionsJson}"""
-    }
-
-    private fun escapeJson(s: String): String {
-        val sb = StringBuilder(s.length + 16)
-        for (c in s) {
-            when (c) {
-                '\\' -> sb.append("\\\\")
-                '"' -> sb.append("\\\"")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                in '\u0000'..'\u001F' -> sb.append("\\u%04x".format(c.code))
-                else -> sb.append(c)
-            }
-        }
-        return sb.toString()
-    }
 
     companion object {
         const val DEFAULT_BASE_URL = "http://localhost:11434"

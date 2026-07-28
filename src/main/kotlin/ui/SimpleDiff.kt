@@ -3,11 +3,17 @@ package ui
 /**
  * Simple line-by-line diff for comparing two texts.
  * Produces unified-style output: - for lines only in A, + for lines only in B.
+ * Uses O(n·m) LCS algorithm — a size guard prevents freezes on large inputs.
  */
 object SimpleDiff {
+    private const val MAX_LINES = 500
+
     fun diff(textA: String, textB: String, labelA: String = "A", labelB: String = "B"): String {
         val linesA = textA.lines()
         val linesB = textB.lines()
+        if (linesA.size > MAX_LINES || linesB.size > MAX_LINES) {
+            return "Diff skipped — texts too large (${linesA.size} and ${linesB.size} lines). Side-by-side comparison recommended."
+        }
         val lcs = computeLCS(linesA, linesB)
         val sb = StringBuilder()
         sb.append("--- $labelA\n+++ $labelB\n\n")

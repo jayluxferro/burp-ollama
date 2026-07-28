@@ -83,12 +83,34 @@ class OllamaSettingsPanel(
     }
     private val timeoutField = JTextField(config.timeoutSeconds.toString(), 8)
     private val numCtxField = JTextField(config.numCtx.toString(), 8)
-    private val streamingCheck = JCheckBox("Use streaming responses", config.streaming)
+    private fun updateStreamingBurpWarning() {
+        streamingBurpWarningLabel.isVisible = streamingCheck.isSelected && useBurpHttpApiCheck.isSelected
+    }
+
+    private val streamingCheck = JCheckBox("Use streaming responses", config.streaming).apply {
+        addItemListener { updateStreamingBurpWarning() }
+    }
     private val useBurpHttpApiCheck = JCheckBox("Route Ollama via Burp HTTP API", config.useBurpHttpApi).apply {
         toolTipText = "Send Ollama requests through Burp (proxy, TLS). Default: direct to localhost."
+        addItemListener { updateStreamingBurpWarning() }
     }
     private val proactiveSuggestionsCheck = JCheckBox("Enable proactive suggestions", config.proactiveSuggestionsEnabled).apply {
         toolTipText = "Detect login, auth, API patterns and suggest AI actions in Ollama tab"
+    }
+    private val passiveScanCheck = JCheckBox("Enable passive scan (experimental)", config.passiveScanEnabled).apply {
+        toolTipText = "Register Ollama as a passive scan check. Adds overhead to every request/response. Currently a stub for future AI-powered passive scanning."
+    }
+    private val temperatureField = JTextField(config.temperature?.toString() ?: "", 8).apply {
+        toolTipText = "Model temperature (0.0-2.0). Empty = use model default."
+    }
+    private val topPField = JTextField(config.topP?.toString() ?: "", 8).apply {
+        toolTipText = "Top-p sampling (0.0-1.0). Empty = use model default."
+    }
+    private val numPredictField = JTextField(config.numPredict?.toString() ?: "", 8).apply {
+        toolTipText = "Max tokens to predict. Empty = use model default."
+    }
+    private val streamingBurpWarningLabel = JLabel("<html><font color='orange'>Warning: Streaming is not supported via Burp HTTP API</font></html>").apply {
+        isVisible = config.streaming && config.useBurpHttpApi
     }
     private val reportSnippetTemplateCombo = JComboBox(arrayOf("Default", "OWASP")).apply {
         toolTipText = "Format for Copy as report snippet"
@@ -173,6 +195,10 @@ class OllamaSettingsPanel(
     private val customPromptsList = JList(customPromptsListModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         toolTipText = "Custom prompts appear in Ask Ollama context menu"
+    }
+    private val modelWarningLabel = JLabel().apply {
+        foreground = java.awt.Color(180, 40, 40)
+        font = font.deriveFont(java.awt.Font.BOLD)
     }
 
     private val formPanel = JPanel(GridBagLayout())
@@ -276,6 +302,11 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        gbc.gridwidth = 2
+        formPanel.add(modelWarningLabel, gbc)
+        gbc.gridwidth = 1
+        gbc.gridy++
+
         formPanel.add(JLabel("Model override (Repeater):"), gbc)
         gbc.gridx = 1
         formPanel.add(modelRepeaterCombo, gbc)
@@ -348,6 +379,24 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        formPanel.add(JLabel("Temperature:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(temperatureField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Top P:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(topPField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(JLabel("Num predict:"), gbc)
+        gbc.gridx = 1
+        formPanel.add(numPredictField, gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
         formPanel.add(streamingCheck, gbc)
         gbc.gridx = 1
         formPanel.add(JLabel(""), gbc)
@@ -360,7 +409,19 @@ class OllamaSettingsPanel(
         gbc.gridx = 0
         gbc.gridy++
 
+        formPanel.add(streamingBurpWarningLabel, gbc)
+        gbc.gridx = 1
+        formPanel.add(JLabel(""), gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
         formPanel.add(proactiveSuggestionsCheck, gbc)
+        gbc.gridx = 1
+        formPanel.add(JLabel(""), gbc)
+        gbc.gridx = 0
+        gbc.gridy++
+
+        formPanel.add(passiveScanCheck, gbc)
         gbc.gridx = 1
         formPanel.add(JLabel(""), gbc)
         gbc.gridx = 0
@@ -597,26 +658,28 @@ class OllamaSettingsPanel(
                 return@addActionListener
             }
             generateLoginButton.isEnabled = false
-            ollamaService.execute {
-                val result = ollamaService.chat(
-                    model = config.model,
-                    systemPrompt = config.systemPromptGenerateLogin,
-                    userMessage = desc,
-                    numCtx = config.numCtx
-                )
-                SwingUtilities.invokeLater {
-                    generateLoginButton.isEnabled = true
-                    when {
-                        result.isSuccess -> {
-                            val template = result.getOrNull()?.content?.trim() ?: ""
-                            loginRequestTemplateField.text = template
-                            config.loginRequestTemplate = template
-                            onTestConnection("Generated login template. Review and edit if needed.")
+            ollamaService.executeSafe(
+                task = {
+                    val result = ollamaService.chat(
+                        model = config.model,
+                        systemPrompt = config.systemPromptGenerateLogin,
+                        userMessage = desc,
+                        numCtx = config.numCtx
+                    )
+                    SwingUtilities.invokeLater {
+                        generateLoginButton.isEnabled = true
+                        when {
+                            result.isSuccess -> {
+                                val template = result.getOrNull()?.content?.trim() ?: ""
+                                loginRequestTemplateField.text = template
+                                config.loginRequestTemplate = template
+                                onTestConnection("Generated login template. Review and edit if needed.")
+                            }
+                            else -> onTestConnection("Generation failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}")
                         }
-                        else -> onTestConnection("Generation failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}")
                     }
                 }
-            }
+            )
         }
 
         testButton.addActionListener {
@@ -642,6 +705,13 @@ class OllamaSettingsPanel(
         }
     }
 
+    private fun updateModelWarning() {
+        val currentModel = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: "").trim()
+        modelWarningLabel.text = if (currentModel.isBlank()) {
+            "⚠ No model configured. Select or type a model name above, then click Save."
+        } else ""
+    }
+
     private fun refreshCustomPromptsList() {
         customPromptsListModel.clear()
         config.getCustomPrompts().forEach { (name, _) -> customPromptsListModel.addElement(name) }
@@ -663,13 +733,21 @@ class OllamaSettingsPanel(
     }
 
     private fun refreshModelComboAsync() {
-        ollamaService.execute {
-            config.applyTo(ollamaService)
-            val models = ollamaService.listModels()
-            if (models.isSuccess) {
-                SwingUtilities.invokeLater { refreshModelCombo(models.getOrNull() ?: emptyList()) }
+        ollamaService.executeSafe(
+            task = {
+                config.applyTo(ollamaService)
+                val models = ollamaService.listModels()
+                if (models.isSuccess) {
+                    SwingUtilities.invokeLater {
+                        val list = models.getOrNull() ?: emptyList()
+                        refreshModelCombo(list)
+                    }
+                }
+            },
+            onError = { e ->
+                SwingUtilities.invokeLater { statusLabel.text = "Error: ${e.message}" }
             }
-        }
+        )
     }
 
     private fun modelFromCombo(combo: JComboBox<String>): String {
@@ -679,7 +757,7 @@ class OllamaSettingsPanel(
 
     private fun saveToConfig() {
         config.baseUrl = baseUrlField.text.trim().ifBlank { OllamaService.DEFAULT_BASE_URL }
-        config.model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: "").trim().ifBlank { OllamaConfig.DEFAULT_MODEL }
+        config.model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: "").trim()
         config.modelRepeater = modelFromCombo(modelRepeaterCombo)
         config.modelSuite = modelFromCombo(modelSuiteCombo)
         config.modelDecoder = modelFromCombo(modelDecoderCombo)
@@ -693,12 +771,16 @@ class OllamaSettingsPanel(
         config.timeoutSeconds = timeoutField.text.toIntOrNull() ?: OllamaService.DEFAULT_TIMEOUT
         config.numCtx = numCtxField.text.toIntOrNull() ?: OllamaConfig.DEFAULT_NUM_CTX
         config.streaming = streamingCheck.isSelected
+        config.temperature = temperatureField.text.toDoubleOrNull()
+        config.topP = topPField.text.toDoubleOrNull()
+        config.numPredict = numPredictField.text.toIntOrNull()
         config.reportSnippetTemplate = when (reportSnippetTemplateCombo.selectedIndex) {
             1 -> ReportSnippetFormatter.TEMPLATE_OWASP
             else -> ReportSnippetFormatter.TEMPLATE_DEFAULT
         }
         config.useBurpHttpApi = useBurpHttpApiCheck.isSelected
         config.proactiveSuggestionsEnabled = proactiveSuggestionsCheck.isSelected
+        config.passiveScanEnabled = passiveScanCheck.isSelected
         config.systemPromptExplain = systemPromptField.text.ifBlank { SecurityPrompts.DEFAULT_EXPLAIN_SELECTION }
         config.systemPromptExplainHeaders = promptExplainHeadersField.text.ifBlank { SecurityPrompts.DEFAULT_EXPLAIN_HEADERS }
         config.systemPromptAnalyze = promptAnalyzeField.text.ifBlank { SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY }
@@ -717,6 +799,7 @@ class OllamaSettingsPanel(
         config.loginRequestTemplate = loginRequestTemplateField.text
         config.loginUsername = loginUsernameField.text
         config.loginPassword = String(loginPasswordField.password)
+        updateModelWarning()
     }
 
     private fun loadFromConfig() {
@@ -750,12 +833,16 @@ class OllamaSettingsPanel(
         timeoutField.text = config.timeoutSeconds.toString()
         numCtxField.text = config.numCtx.toString()
         streamingCheck.isSelected = config.streaming
+        temperatureField.text = config.temperature?.toString() ?: ""
+        topPField.text = config.topP?.toString() ?: ""
+        numPredictField.text = config.numPredict?.toString() ?: ""
         reportSnippetTemplateCombo.selectedIndex = when (config.reportSnippetTemplate) {
             ReportSnippetFormatter.TEMPLATE_OWASP -> 1
             else -> 0
         }
         useBurpHttpApiCheck.isSelected = config.useBurpHttpApi
         proactiveSuggestionsCheck.isSelected = config.proactiveSuggestionsEnabled
+        passiveScanCheck.isSelected = config.passiveScanEnabled
         systemPromptField.text = config.systemPromptExplain
         promptExplainHeadersField.text = config.systemPromptExplainHeaders
         promptAnalyzeField.text = config.systemPromptAnalyze
@@ -775,6 +862,7 @@ class OllamaSettingsPanel(
         loginUsernameField.text = config.loginUsername
         loginPasswordField.text = config.loginPassword
         refreshCustomPromptsList()
+        updateModelWarning()
     }
 
     override fun uiComponent(): JComponent = this

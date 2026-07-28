@@ -94,7 +94,8 @@ class OllamaServiceTest {
         assertTrue(request.path!!.endsWith("/api/chat"))
         val body = request.body.readUtf8()
         assertTrue(body.contains("\"model\":\"llama3.2:3b\""))
-        assertTrue(body.contains("\"stream\":false"))
+        // stream defaults to false and is omitted by kotlinx.serialization
+        assertFalse(body.contains("\"stream\":true"), "stream should not be true (default is false)")
         assertTrue(body.contains("\"num_ctx\":4096"))
     }
 

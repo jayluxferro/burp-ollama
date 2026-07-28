@@ -29,6 +29,7 @@ object OllamaSuggestionRegistry {
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val recentKeys = mutableMapOf<String, Long>() // key -> timestamp
     private const val DEDUPE_WINDOW_MS = 300_000L // 5 minutes
+    private const val MAX_SUGGESTIONS = 200
 
     fun addSuggestion(description: String, suggestedPrompt: String, url: String, method: String): Boolean {
         val key = "$method:$url:$description"
@@ -37,6 +38,17 @@ object OllamaSuggestionRegistry {
             val last = recentKeys[key] ?: 0L
             if (now - last < DEDUPE_WINDOW_MS) return false
             recentKeys[key] = now
+        }
+        if (suggestions.size >= MAX_SUGGESTIONS) {
+            val evicted = suggestions.size - 160
+            suggestions.subList(160, suggestions.size).clear()
+            java.util.logging.Logger.getLogger(OllamaSuggestionRegistry::class.java.name)
+                .info("Evicted $evicted old suggestions (max $MAX_SUGGESTIONS)")
+        }
+        // Clean up stale recentKeys entries older than 2x dedupe window
+        synchronized(recentKeys) {
+            val cutoff = now - DEDUPE_WINDOW_MS * 2
+            recentKeys.entries.removeAll { it.value < cutoff }
         }
         val id = ++nextId
         suggestions.add(0, Suggestion(id, description, suggestedPrompt, url, method, Instant.now()))

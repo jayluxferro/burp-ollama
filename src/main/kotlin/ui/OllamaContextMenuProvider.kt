@@ -170,6 +170,12 @@ class OllamaContextMenuProvider(
         val menu = JMenu("Use model")
         menu.toolTipText = "Select model for this and subsequent context menu actions"
         if (config.isChainEnabled()) {
+            if (!ContextMenuModelState.bypassChain) {
+                menu.add(JMenuItem("Chain active: ${config.chainModelA()} → ${config.chainModelB()}").apply {
+                    isEnabled = false
+                })
+                menu.add(javax.swing.JSeparator())
+            }
             menu.add(JMenuItem("Use chain (${config.chainModelA()}→${config.chainModelB()})").apply {
                 addActionListener { ContextMenuModelState.bypassChain = false }
             })

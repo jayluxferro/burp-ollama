@@ -78,17 +78,7 @@ private class OllamaWebSocketMessagePanel(
         toolbar.add(modelCombo)
         toolbar.add(JButton("Refresh").apply {
             addActionListener {
-                config.applyTo(ollamaService)
-                ollamaService.execute {
-                    val models = ollamaService.listModels()
-                    if (models.isSuccess) {
-                        SwingUtilities.invokeLater {
-                            val list = models.getOrNull() ?: emptyList()
-                            modelCombo.removeAllItems()
-                            list.forEach { modelCombo.addItem(it) }
-                        }
-                    }
-                }
+                ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, config.modelForTool(burp.api.montoya.core.ToolType.REPEATER))
             }
         })
         toolbar.add(askButton)
@@ -144,7 +134,7 @@ private class OllamaWebSocketMessagePanel(
  * Ollama tab for WebSocket message editors.
  */
 class OllamaWebSocketMessageEditor(
-    creationContext: EditorCreationContext,
+    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
     private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,

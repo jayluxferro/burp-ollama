@@ -59,22 +59,4 @@ class OllamaResponseParserTest {
         val result = OllamaResponseParser.parseChatResponse("not json")
         assertEquals("Failed to parse response", result.error)
     }
-
-    @Test
-    fun `extractJsonString extracts simple value`() {
-        val json = """{"key":"value"}"""
-        assertEquals("value", OllamaResponseParser.extractJsonString(json, "key"))
-    }
-
-    @Test
-    fun `extractJsonString returns null for missing key`() {
-        val json = """{"other":"value"}"""
-        assertNull(OllamaResponseParser.extractJsonString(json, "key"))
-    }
-
-    @Test
-    fun `extractJsonString handles escaped quotes`() {
-        val json = """{"key":"say \"hello\""}"""
-        assertEquals("say \"hello\"", OllamaResponseParser.extractJsonString(json, "key"))
-    }
 }

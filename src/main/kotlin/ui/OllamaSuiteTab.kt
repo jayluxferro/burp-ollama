@@ -144,6 +144,7 @@ class OllamaSuiteTab(
     }
     private val analyzedHeaderLabel = JLabel("Recently analyzed items")
     private lateinit var tabbedPane: JTabbedPane
+    private var compareTabPopulated = false
 
     // Compare models
     private val comparePromptArea = JTextArea(5, 50).apply {
@@ -220,23 +221,7 @@ class OllamaSuiteTab(
         toolbar.add(JButton("Refresh").apply {
             toolTipText = "Refresh model list from Ollama"
             addActionListener {
-                config.applyTo(ollamaService)
-                ollamaService.execute {
-                    val models = ollamaService.listModels()
-                    if (models.isSuccess) {
-                        SwingUtilities.invokeLater {
-                            val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.modelSuite.ifBlank { config.model }
-                            val list = models.getOrNull() ?: emptyList()
-                            val items = if (list.isEmpty()) listOf(current) else {
-                                val mutable = list.toMutableList()
-                                if (!mutable.contains(current)) mutable.add(0, current)
-                                mutable
-                            }
-                            modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                            modelCombo.selectedItem = current
-                        }
-                    }
-                }
+                ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, config.modelSuite.ifBlank { config.model })
             }
         })
         toolbar.add(JButton("Quick prompt").apply {
@@ -494,6 +479,13 @@ class OllamaSuiteTab(
         tabbedPane.addTab("Tasks", tasksPanel)
         tabbedPane.addTab("Suggestions", suggestionsPanel)
         tabbedPane.addTab("Analyzed", analyzedPanel)
+        tabbedPane.addChangeListener { e ->
+            val pane = e.source as JTabbedPane
+            if (pane.selectedIndex == 1 && !compareTabPopulated) {
+                compareTabPopulated = true
+                refreshCompareModelList()
+            }
+        }
         add(tabbedPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
@@ -641,7 +633,6 @@ class OllamaSuiteTab(
                     }
                 }.thenAccept { result ->
                     SwingUtilities.invokeLater {
-                        setLoading(false)
                         result.fold(
                             onSuccess = {
                                 branches[currentBranchIndex].add(userMessage to newReplyAccumulator.toString())
@@ -656,12 +647,13 @@ class OllamaSuiteTab(
                             }
                         )
                     }
+                }.whenComplete { _, _ ->
+                    SwingUtilities.invokeLater { setLoading(false) }
                 }
             } else {
                 ollamaService.chatWithMessagesAsync(model, messages, numCtx)
                     .thenAccept { result ->
                         SwingUtilities.invokeLater {
-                            setLoading(false)
                             result.fold(
                                 onSuccess = { response ->
                                     responseArea.append(response)
@@ -677,6 +669,8 @@ class OllamaSuiteTab(
                                 }
                             )
                         }
+                    }.whenComplete { _, _ ->
+                        SwingUtilities.invokeLater { setLoading(false) }
                     }
             }
         }
@@ -691,20 +685,11 @@ class OllamaSuiteTab(
     }
 
     private fun buildMessages(systemPrompt: String, newUserMessage: String): List<ollama.ChatMessage> {
-        val messages = mutableListOf<ollama.ChatMessage>()
-        if (systemPrompt.isNotBlank()) {
-            messages.add(ollama.ChatMessage(role = "system", content = systemPrompt))
-        }
-        for ((user, assistant) in branches[currentBranchIndex]) {
-            messages.add(ollama.ChatMessage(role = "user", content = user))
-            messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
-        }
-        val userContent = if (branches[currentBranchIndex].isNotEmpty())
-            "Regarding our conversation above: $newUserMessage"
-        else
-            newUserMessage
-        messages.add(ollama.ChatMessage(role = "user", content = userContent))
-        return messages
+        return ConversationHelper.buildMessages(
+            systemPrompt = systemPrompt,
+            conversationHistory = branches[currentBranchIndex],
+            newUserMessage = newUserMessage
+        )
     }
 
     private fun updateSendButtons() {
@@ -791,32 +776,65 @@ class OllamaSuiteTab(
 
     private fun sendDetectedRequestsToRepeater() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        var success = 0
+        var failure = 0
         for ((i, raw) in requests.withIndex()) {
             try {
                 val req = HttpRequest.httpRequest(raw)
                 montoyaApi.repeater().sendToRepeater(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
         }
+        reportSendResult("Repeater", success, failure)
     }
 
     private fun sendDetectedRequestsToIntruder() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        var success = 0
+        var failure = 0
         for ((i, raw) in requests.withIndex()) {
             try {
                 val req = HttpRequest.httpRequest(raw)
                 montoyaApi.intruder().sendToIntruder(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
         }
+        reportSendResult("Intruder", success, failure)
     }
 
     private fun sendDetectedRequestsToOrganizer() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        var success = 0
+        var failure = 0
         for (raw in requests) {
             try {
                 val req = HttpRequest.httpRequest(raw)
                 val rr = montoyaApi.http().sendRequest(req)
                 montoyaApi.organizer().sendToOrganizer(rr)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
+        }
+        reportSendResult("Organizer", success, failure)
+    }
+
+    private fun reportSendResult(target: String, success: Int, failure: Int) {
+        val total = success + failure
+        if (total == 0) return
+        if (failure == 0) return // all good
+        val msg = if (success == 0) {
+            "Failed to send any requests to $target. The extracted HTTP requests may be malformed."
+        } else {
+            "$success request(s) sent to $target. $failure request(s) failed."
+        }
+        if (success == 0) {
+            javax.swing.JOptionPane.showMessageDialog(
+                this,
+                msg,
+                "Send to $target",
+                javax.swing.JOptionPane.WARNING_MESSAGE
+            )
+        } else {
+            montoyaApi.logging().logToOutput(msg)
         }
     }
 
@@ -1048,23 +1066,6 @@ class OllamaSuiteTab(
     }
 
     private fun refreshModelCombo() {
-        ollamaService.execute {
-            config.applyTo(ollamaService)
-            val models = ollamaService.listModels()
-            if (models.isSuccess) {
-                SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.modelSuite.ifBlank { config.model }
-                    val list = models.getOrNull() ?: emptyList()
-                    OllamaModelCache.update(list)
-                    val items = if (list.isEmpty()) listOf(current) else {
-                        val mutable = list.toMutableList()
-                        if (!mutable.contains(current)) mutable.add(0, current)
-                        mutable
-                    }
-                    modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                    modelCombo.selectedItem = current
-                }
-            }
-        }
+        ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, config.modelSuite.ifBlank { config.model })
     }
 }

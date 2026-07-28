@@ -1,5 +1,6 @@
 package ui
 
+import ollama.OllamaConfig
 import ollama.OllamaModelCache
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.requests.HttpRequest
@@ -58,7 +59,8 @@ class OllamaResponseDialog(
     private val stopRequested: AtomicBoolean? = null,
     private val onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
     private val onFollowUp: ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
-    private val reportSnippetTemplate: String = "default"
+    private val reportSnippetTemplate: String = "default",
+    private val fallbackModel: String = ""
 ) : JDialog(parent, title, modal) {
 
     private val textArea = MarkdownTextPane(20, 60).apply {
@@ -112,7 +114,7 @@ class OllamaResponseDialog(
         JComboBox<String>().apply {
             isEditable = true
             val cached = OllamaModelCache.models
-            val items = if (cached.isEmpty()) listOf("llama3.2:3b") else cached
+            val items = if (cached.isEmpty()) listOf(fallbackModel) else cached
             model = DefaultComboBoxModel(items.toTypedArray())
             toolTipText = "Model to use when retrying"
         }
@@ -253,7 +255,7 @@ class OllamaResponseDialog(
                 if (followUp.isBlank()) return@addActionListener
                 replyArea.text = ""
                 replyButton.isEnabled = false
-                onFollowUp?.invoke(followUp, getContent(), { chunk -> append(chunk); replyButton.isEnabled = true }, { err -> append("\n\n--- Error ---\n$err"); replyButton.isEnabled = true })
+                onFollowUp.invoke(followUp, getContent(), { chunk -> append(chunk); replyButton.isEnabled = true }, { err -> append("\n\n--- Error ---\n$err"); replyButton.isEnabled = true })
             }
             replyPanel.add(JLabel("Follow-up:"))
             replyPanel.add(JScrollPane(replyArea).apply {
@@ -378,11 +380,11 @@ class OllamaResponseDialog(
     private fun buildReportSnippet(text: String): String = ReportSnippetFormatter.format(text, reportSnippetTemplate)
 
     companion object {
-        fun show(parent: Frame?, title: String, content: String, retry: (() -> Unit)? = null, reportSnippetTemplate: String = "default") {
+        fun show(parent: Frame?, title: String, content: String, retry: (() -> Unit)? = null, reportSnippetTemplate: String = "default", fallbackModel: String = "") {
             SwingUtilities.invokeLater {
                 val isError = title.contains("Error", ignoreCase = true)
                 val retryWithModel = retry?.let { r -> { _: String? -> r() } }
-                val dialog = OllamaResponseDialog(parent, title, content, isError, retryWithModel, reportSnippetTemplate = reportSnippetTemplate)
+                val dialog = OllamaResponseDialog(parent, title, content, isError, retryWithModel, reportSnippetTemplate = reportSnippetTemplate, fallbackModel = fallbackModel)
                 dialog.isVisible = true
             }
         }
@@ -402,7 +404,8 @@ class OllamaResponseDialog(
             stopRequested: AtomicBoolean? = null,
             onRefineWithChain: ((String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
             onFollowUp: ((String, String, (String) -> Unit, (String) -> Unit) -> Unit)? = null,
-            reportSnippetTemplate: String = "default"
+            reportSnippetTemplate: String = "default",
+            fallbackModel: String = ""
         ): StreamingDialogCallbacks {
             val dialog = OllamaResponseDialog(
                 parent, title, "",
@@ -413,7 +416,8 @@ class OllamaResponseDialog(
                 stopRequested = stopRequested,
                 onRefineWithChain = onRefineWithChain,
                 onFollowUp = onFollowUp,
-                reportSnippetTemplate = reportSnippetTemplate
+                reportSnippetTemplate = reportSnippetTemplate,
+                fallbackModel = fallbackModel
             )
             SwingUtilities.invokeLater {
                 dialog.isVisible = true

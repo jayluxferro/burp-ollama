@@ -32,8 +32,16 @@ object OllamaTaskRegistry {
     private var nextId = 0L
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
+    private const val MAX_TASKS = 500
+
     fun addTask(prompt: String, source: String): Long {
         val id = ++nextId
+        if (tasks.size >= MAX_TASKS) {
+            val evicted = tasks.size - 400
+            tasks.subList(400, tasks.size).clear()
+            java.util.logging.Logger.getLogger(OllamaTaskRegistry::class.java.name)
+                .info("Evicted $evicted old tasks (max $MAX_TASKS)")
+        }
         val task = Task(id, prompt, source, Task.Status.RUNNING, null, null, Instant.now())
         tasks.add(0, task)
         notifyListeners()

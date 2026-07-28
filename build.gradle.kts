@@ -1,6 +1,7 @@
 plugins {
     id("java")
     kotlin("jvm") version "1.9.24"
+    kotlin("plugin.serialization") version "1.9.24"
 }
 
 version = "1.0.0"
@@ -11,6 +12,7 @@ repositories {
 
 dependencies {
     compileOnly("net.portswigger.burp.extensions:montoya-api:2025.12")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
     testImplementation("net.portswigger.burp.extensions:montoya-api:2025.12")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")

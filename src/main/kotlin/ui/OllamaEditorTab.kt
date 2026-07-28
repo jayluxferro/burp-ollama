@@ -228,25 +228,15 @@ class OllamaEditorPanel(
         toolbar.add(JButton("Refresh").apply {
             toolTipText = "Refresh model list from Ollama"
             addActionListener {
-                config.applyTo(ollamaService)
-                ollamaService.execute {
-                    val models = ollamaService.listModels()
-                    if (models.isSuccess) {
-                        SwingUtilities.invokeLater {
-                            val preferred = ContextMenuModelState.modelOverride?.takeIf { it.isNotBlank() }
-                            val current = preferred ?: (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
-                            val list = models.getOrNull() ?: emptyList()
-                            val items = if (list.isEmpty()) listOf(current) else {
-                                val mutable = list.toMutableList()
-                                if (!mutable.contains(current)) mutable.add(0, current)
-                                mutable
-                            }
-                            modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                            modelCombo.selectedItem = current
-                        }
-                    }
-                }
+                ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, defaultModel)
             }
+        })
+        toolbar.add(JLabel().apply {
+            if (config.isChainEnabled()) {
+                text = "  🔗 ${config.chainModelA()} → ${config.chainModelB()}"
+                toolTipText = "Chain mode active: model A generates, model B refines"
+            }
+            isVisible = config.isChainEnabled()
         })
         config.systemPromptOptions().map { it.first }.forEach { editorSystemPromptCombo.addItem(it) }
         editorSystemPromptCombo.selectedIndex = 1.coerceIn(0, editorSystemPromptCombo.itemCount - 1) // Default (Explain)
@@ -461,7 +451,6 @@ class OllamaEditorPanel(
                     appendToResponse(chunk)
                 }.thenAccept { result ->
                     SwingUtilities.invokeLater {
-                        setLoading(false)
                         val newResponse = responseArea.text.substring(startLength)
                         result.fold(
                             onSuccess = {
@@ -488,12 +477,13 @@ class OllamaEditorPanel(
                             }
                         )
                     }
+                }.whenComplete { _, _ ->
+                    SwingUtilities.invokeLater { setLoading(false) }
                 }
             } else {
                 ollamaService.chatWithMessagesAsync(model, messages, numCtx)
                     .thenAccept { result ->
                         SwingUtilities.invokeLater {
-                            setLoading(false)
                             result.fold(
                                 onSuccess = { response ->
                                     if (conversationHistory.isNotEmpty()) responseArea.append("\n---\n")
@@ -521,6 +511,8 @@ class OllamaEditorPanel(
                                 }
                             )
                         }
+                    }.whenComplete { _, _ ->
+                        SwingUtilities.invokeLater { setLoading(false) }
                     }
             }
         }
@@ -655,55 +647,78 @@ class OllamaEditorPanel(
     private fun sendDetectedRequestsToRepeater() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
         val service = currentRequestResponse?.request()?.httpService()
+        var success = 0
+        var failure = 0
         for ((i, raw) in requests.withIndex()) {
             try {
                 var req = HttpRequest.httpRequest(raw)
                 // Use current request's target (host, port, protocol) when available
                 if (service != null) req = req.withService(service)
                 montoyaApi.repeater().sendToRepeater(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
         }
+        reportSendResult("Repeater", success, failure)
     }
 
     private fun sendDetectedRequestsToIntruder() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
         val service = currentRequestResponse?.request()?.httpService()
+        var success = 0
+        var failure = 0
         for ((i, raw) in requests.withIndex()) {
             try {
                 var req = HttpRequest.httpRequest(raw)
                 if (service != null) req = req.withService(service)
                 montoyaApi.intruder().sendToIntruder(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
         }
+        reportSendResult("Intruder", success, failure)
     }
 
     private fun sendDetectedRequestsToOrganizer() {
         val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        var success = 0
+        var failure = 0
         for (raw in requests) {
             try {
                 val req = HttpRequest.httpRequest(raw)
                 val rr = montoyaApi.http().sendRequest(req)
                 montoyaApi.organizer().sendToOrganizer(rr)
-            } catch (_: Exception) { /* skip invalid */ }
+                success++
+            } catch (_: Exception) { failure++ }
+        }
+        reportSendResult("Organizer", success, failure)
+    }
+
+    private fun reportSendResult(target: String, success: Int, failure: Int) {
+        val total = success + failure
+        if (total == 0 || failure == 0) return
+        val msg = if (success == 0) {
+            "Failed to send any requests to $target. The extracted HTTP requests may be malformed."
+        } else {
+            "$success request(s) sent to $target. $failure request(s) failed."
+        }
+        if (success == 0) {
+            javax.swing.JOptionPane.showMessageDialog(
+                this,
+                msg,
+                "Send to $target",
+                javax.swing.JOptionPane.WARNING_MESSAGE
+            )
+        } else {
+            montoyaApi.logging().logToOutput(msg)
         }
     }
 
     private fun buildMessages(systemPrompt: String, newUserMessage: String): List<ollama.ChatMessage> {
-        val messages = mutableListOf<ollama.ChatMessage>()
-        if (systemPrompt.isNotBlank()) {
-            messages.add(ollama.ChatMessage(role = "system", content = systemPrompt))
-        }
-        for ((user, assistant) in conversationHistory) {
-            messages.add(ollama.ChatMessage(role = "user", content = user))
-            messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
-        }
-        // Prefix follow-ups with context reminder so the model stays grounded
-        val userContent = if (conversationHistory.isNotEmpty())
-            "Regarding the HTTP request/response we just analyzed: $newUserMessage"
-        else
-            newUserMessage
-        messages.add(ollama.ChatMessage(role = "user", content = userContent))
-        return messages
+        return ConversationHelper.buildMessages(
+            systemPrompt = systemPrompt,
+            conversationHistory = conversationHistory,
+            newUserMessage = newUserMessage,
+            followUpPrefix = "Regarding the HTTP request/response we just analyzed: "
+        )
     }
 
     private fun appendToResponse(text: String) {
@@ -729,24 +744,7 @@ class OllamaEditorPanel(
     }
 
     private fun refreshModelCombo() {
-        ollamaService.execute {
-            config.applyTo(ollamaService)
-            val models = ollamaService.listModels()
-            if (models.isSuccess) {
-                SwingUtilities.invokeLater {
-                    val preferred = ContextMenuModelState.modelOverride?.takeIf { it.isNotBlank() }
-                    val current = preferred ?: (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: defaultModel
-                    val list = models.getOrNull() ?: emptyList()
-                    val items = if (list.isEmpty()) listOf(current) else {
-                        val mutable = list.toMutableList()
-                        if (!mutable.contains(current)) mutable.add(0, current)
-                        mutable
-                    }
-                    modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                    modelCombo.selectedItem = current
-                }
-            }
-        }
+        ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, defaultModel)
     }
 }
 
