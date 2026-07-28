@@ -31,7 +31,7 @@ class OllamaConfigTest {
 
     @Test
     fun `model returns default when not set`() {
-        assertEquals("llama3.2:3b", config.model)
+        assertEquals(OllamaConfig.DEFAULT_MODEL, config.model)
     }
 
     @Test

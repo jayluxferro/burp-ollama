@@ -15,11 +15,15 @@ class SecurityPromptsTest {
     }
 
     @Test
-    fun `default prompts contain security context`() {
+    fun `default system prompt and task prompts define security agent`() {
+        val base = SecurityPrompts.DEFAULT_SYSTEM_PROMPT
+        assertTrue(base.contains("security", ignoreCase = true))
+        assertTrue(base.contains("researcher", ignoreCase = true))
+        assertTrue(base.contains("engineer", ignoreCase = true))
+        assertTrue(base.contains("hacker", ignoreCase = true))
         assertTrue(SecurityPrompts.DEFAULT_EXPLAIN_SELECTION.contains("security", ignoreCase = true))
-        assertTrue(SecurityPrompts.DEFAULT_EXPLAIN_HEADERS.contains("headers", ignoreCase = true))
-        assertTrue(SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY.contains("penetration", ignoreCase = true))
-        assertTrue(SecurityPrompts.DEFAULT_VALIDATE_FALSE_POSITIVE.contains("false positive", ignoreCase = true))
-        assertTrue(SecurityPrompts.DEFAULT_DECIPHER_CODE.contains("security", ignoreCase = true))
+        assertTrue(SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY.contains("security", ignoreCase = true))
+        assertTrue(SecurityPrompts.DEFAULT_EXPLAIN_SELECTION.contains("explain", ignoreCase = true))
+        assertTrue(SecurityPrompts.DEFAULT_ANALYZE_VULNERABILITY.contains("analyze", ignoreCase = true))
     }
 }

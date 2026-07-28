@@ -68,7 +68,7 @@ class OllamaServiceTest {
         )
         val result = service.chat("llama3.2:3b", "You are helpful.", "Why is the sky blue?")
         assertTrue(result.isSuccess)
-        assertEquals("The sky is blue.", result.getOrNull())
+        assertEquals("The sky is blue.", result.getOrNull()?.content)
     }
 
     @Test
@@ -94,7 +94,8 @@ class OllamaServiceTest {
         assertTrue(request.path!!.endsWith("/api/chat"))
         val body = request.body.readUtf8()
         assertTrue(body.contains("\"model\":\"llama3.2:3b\""))
-        assertTrue(body.contains("\"stream\":false"))
+        // stream defaults to false and is omitted by kotlinx.serialization
+        assertFalse(body.contains("\"stream\":true"), "stream should not be true (default is false)")
         assertTrue(body.contains("\"num_ctx\":4096"))
     }
 
@@ -134,5 +135,76 @@ class OllamaServiceTest {
         val request = mockServer.takeRequest(1, TimeUnit.SECONDS)
         assertNotNull(request)
         assertTrue(request!!.path!!.startsWith("/api"))
+    }
+
+    @Test
+    fun `chat with empty system prompt sends no system message in body`() {
+        mockServer.enqueue(
+            MockResponse().setBody("""{"message":{"role":"assistant","content":"Hi"},"done":true}""")
+        )
+        service.chat("m", "", "hello")
+        val request = mockServer.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(request)
+        val body = request!!.body.readUtf8()
+        assertFalse(body.contains("\"role\":\"system\""), "Empty system prompt should not add system message: $body")
+        assertTrue(body.contains("\"role\":\"user\""))
+        assertTrue(body.contains("\"content\":\"hello\""))
+    }
+
+    @Test
+    fun `chat with non-empty system prompt sends system and user messages`() {
+        mockServer.enqueue(
+            MockResponse().setBody("""{"message":{"content":"ok"},"done":true}""")
+        )
+        service.chat("m", "You are helpful.", "hi")
+        val request = mockServer.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(request)
+        val body = request!!.body.readUtf8()
+        assertTrue(body.contains("\"role\":\"system\""))
+        assertTrue(body.contains("\"content\":\"You are helpful.\""))
+        assertTrue(body.contains("\"role\":\"user\""))
+        assertTrue(body.contains("\"content\":\"hi\""))
+    }
+
+    @Test
+    fun `chat escapes double quotes in content`() {
+        mockServer.enqueue(
+            MockResponse().setBody("""{"message":{"content":"ok"},"done":true}""")
+        )
+        service.chat("m", "", """say "hello"""")
+        val request = mockServer.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(request)
+        val body = request!!.body.readUtf8()
+        assertTrue(body.contains("\\\"hello\\\""), "Content quotes should be JSON-escaped: $body")
+    }
+
+    @Test
+    fun `chatWithMessages sends correct messages array in body`() {
+        mockServer.enqueue(
+            MockResponse().setBody("""{"message":{"content":"reply"},"done":true}""")
+        )
+        val messages = listOf(
+            ChatMessage(role = "user", content = "first"),
+            ChatMessage(role = "assistant", content = "ack"),
+            ChatMessage(role = "user", content = "second")
+        )
+        val result = service.chatWithMessages("m", messages, numCtx = 8192)
+        assertTrue(result.isSuccess)
+        val request = mockServer.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(request)
+        val body = request!!.body.readUtf8()
+        assertTrue(body.contains("\"role\":\"user\""))
+        assertTrue(body.contains("\"content\":\"first\""))
+        assertTrue(body.contains("\"content\":\"ack\""))
+        assertTrue(body.contains("\"content\":\"second\""))
+        assertTrue(body.contains("\"num_ctx\":8192"))
+    }
+
+    @Test
+    fun `chatWithMessages returns failure when messages list is empty`() {
+        val result = service.chatWithMessages("m", emptyList())
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is OllamaException)
+        assertTrue((result.exceptionOrNull() as OllamaException).message!!.contains("No messages"))
     }
 }

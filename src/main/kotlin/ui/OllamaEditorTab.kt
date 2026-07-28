@@ -1,6 +1,8 @@
 package ui
 
+import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.HttpRequestResponse
+import burp.api.montoya.http.message.requests.HttpRequest
 import burp.api.montoya.ui.Selection
 import burp.api.montoya.ui.editor.extension.ExtensionProvidedHttpRequestEditor
 import burp.api.montoya.ui.editor.extension.ExtensionProvidedHttpResponseEditor
@@ -12,15 +14,31 @@ import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Insets
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JProgressBar
 import javax.swing.JScrollPane
+import javax.swing.Box
+import javax.swing.BoxLayout
 import javax.swing.JSplitPane
 import javax.swing.JTextArea
+import ui.MarkdownTextPane
+import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import javax.swing.border.CompoundBorder
+import javax.swing.border.EmptyBorder
+import javax.swing.border.EtchedBorder
+import javax.swing.border.TitledBorder
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
+import java.awt.event.KeyEvent
 
 private fun truncateForContext(text: String, maxChars: Int = 12_000): String {
     if (text.length <= maxChars) return text
@@ -28,78 +46,389 @@ private fun truncateForContext(text: String, maxChars: Int = 12_000): String {
 }
 
 /**
+ * Extracts HTTP request strings from AI response text (markdown code blocks or raw lines).
+ */
+object HttpRequestExtractor {
+    private val codeBlockRegex = Regex("```(?:http)?\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+    private val httpMethodRegex = Regex("^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+", RegexOption.IGNORE_CASE)
+
+    fun extractRequests(text: String): List<String> {
+        val results = mutableListOf<String>()
+        codeBlockRegex.findAll(text).forEach { match ->
+            val block = match.groupValues[1].trim()
+            if (httpMethodRegex.containsMatchIn(block)) {
+                results.add(block)
+            }
+        }
+        if (results.isEmpty()) {
+            val lines = text.lines()
+            var i = 0
+            while (i < lines.size) {
+                if (lines[i].trim().let { httpMethodRegex.containsMatchIn(it) }) {
+                    val buf = mutableListOf<String>()
+                    while (i < lines.size) {
+                        buf.add(lines[i])
+                        i++
+                        if (i < lines.size && lines[i].isBlank() && buf.any { it.contains("HTTP/") }) break
+                    }
+                    val block = buf.joinToString("\n").trim()
+                    if (block.isNotBlank()) results.add(block)
+                } else {
+                    i++
+                }
+            }
+        }
+        return results
+    }
+}
+
+/**
  * Ollama tab panel for HTTP message editors (Repeater, Proxy).
- * Shows content preview, model selector, Ask Ollama button, and response area.
+ * Shows content preview, context lozenges (Request/Response), model selector, Ask Ollama button, and response area.
+ * Supports Send to Repeater/Intruder when response contains HTTP requests.
  */
 class OllamaEditorPanel(
+    private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
-    private val getContent: (HttpRequestResponse) -> String?,
-    private val showErrorDialog: (String, String, () -> Unit) -> Unit
+    private val hasRequest: Boolean,
+    private val hasResponse: Boolean,
+    private val getRequest: (HttpRequestResponse) -> String?,
+    private val getResponse: (HttpRequestResponse) -> String?,
+    private val showErrorDialog: (String, String, () -> Unit) -> Unit,
+    private val toolType: burp.api.montoya.core.ToolType? = null
 ) : JPanel(BorderLayout()) {
 
     private val contentPreview = JTextArea(5, 40).apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(8, 8, 8, 8)
+        toolTipText = "Request/response content to send as context. Select text to use as focused context."
     }
+    private val includeRequestCheck = JCheckBox("Request", hasRequest).apply {
+        toolTipText = "Include full request in context"
+    }
+    private val includeResponseCheck = JCheckBox("Response", hasResponse).apply {
+        toolTipText = "Include full response in context"
+    }
+    private val includeNotesCheck = JCheckBox("Notes", false).apply {
+        toolTipText = "Include Repeater/tab notes in context"
+    }
+    private val useSelectionCheck = JCheckBox("Use selection", false).apply {
+        toolTipText = "Use selected text in preview as context (select text above first)"
+        isVisible = false
+    }
+    private val defaultModel: String get() = config.modelForTool(toolType ?: burp.api.montoya.core.ToolType.REPEATER)
     private val modelCombo = JComboBox<String>().apply {
         isEditable = true
-        addItem(config.model)
+        addItem(defaultModel)
     }
-    private val askButton = JButton("Ask Ollama")
-    private val followUpField = javax.swing.JTextField(30).apply {
-        toolTipText = "Type a follow-up question for conversation history"
+    private val editorSystemPromptCombo = JComboBox<String>().apply {
+        toolTipText = "System prompt for this request. None = only your payload + question."
     }
-    private val responseArea = JTextArea(15, 40).apply {
-        isEditable = false
+    private val askButton = JButton("Ask Ollama").apply {
+        toolTipText = "Send context to Ollama (Request and/or Response must be checked). Ctrl+Enter from follow-up."
+        font = UiConstants.primaryButtonFont(font)
+    }
+    private val followUpField = JTextArea(2, 40).apply {
         lineWrap = true
         wrapStyleWord = true
+        margin = Insets(4, 6, 4, 6)
+        toolTipText = "Type follow-up here, then click Send or press Ctrl+Enter."
+    }
+    private val followUpSendButton = JButton("Send").apply {
+        toolTipText = "Send follow-up (or press Ctrl+Enter in the field above)"
+        font = UiConstants.primaryButtonFont(font)
+        isEnabled = false
+    }
+    private val responseArea = MarkdownTextPane(15, 40)
+    private val sendToRepeaterButton = JButton("Send to Repeater").apply {
+        toolTipText = "Send detected HTTP request(s) from response to Repeater"
+        isEnabled = false
+    }
+    private val sendToIntruderButton = JButton("Send to Intruder").apply {
+        toolTipText = "Send detected HTTP request(s) from response to Intruder"
+        isEnabled = false
+    }
+    private val sendToOrganizerButton = JButton("Send to Organizer").apply {
+        toolTipText = "Send request(s) to Organizer (sends each request, adds response)"
+        isEnabled = false
+    }
+    private val copyButton = JButton("Copy").apply {
+        toolTipText = "Copy response to clipboard (paste into Repeater notes or elsewhere)"
+    }
+    private val copyReportButton = JButton("Copy as report snippet").apply {
+        toolTipText = "Copy formatted for vulnerability reports"
+        isEnabled = false
+    }
+    private val appendToNotesButton = JButton("Append to notes").apply {
+        toolTipText = "Append AI response to Repeater tab notes"
+        isEnabled = false
+    }
+    private val clearButton = JButton("Clear").apply {
+        toolTipText = "Clear response and conversation, start fresh"
+    }
+    private val exportConversationButton = JButton("Export conversation").apply {
+        toolTipText = "Save conversation as Markdown file"
+        isEnabled = false
+    }
+    private val notesEditable: Boolean get() = toolType != burp.api.montoya.core.ToolType.PROXY
+    private val loadingPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+        border = CompoundBorder(
+            EtchedBorder(EtchedBorder.LOWERED),
+            EmptyBorder(UiConstants.PANEL_PADDING_SMALL)
+        )
+        add(JProgressBar().apply { isIndeterminate = true })
+        add(JLabel("Querying Ollama…"))
+        isVisible = false
     }
     private var currentRequestResponse: HttpRequestResponse? = null
     private val conversationHistory = mutableListOf<Pair<String, String>>()
 
     init {
-        val topPanel = JPanel(BorderLayout())
-        topPanel.add(JScrollPane(contentPreview).apply {
+        border = EmptyBorder(UiConstants.PANEL_PADDING)
+        val contextPanel = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP)).apply {
+            border = EmptyBorder(0, 0, 6, 0)
+        }
+        contextPanel.add(JLabel("Context:"))
+        if (hasRequest) contextPanel.add(includeRequestCheck)
+        if (hasResponse) contextPanel.add(includeResponseCheck)
+        contextPanel.add(includeNotesCheck)
+        contextPanel.add(useSelectionCheck)
+        val topPanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Context — select Request/Response, then Ask Ollama", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(6, 6, 6, 6)
+            )
+        }
+        topPanel.add(contextPanel, BorderLayout.NORTH)
+        val contentScroll = JScrollPane(contentPreview).apply {
             preferredSize = Dimension(0, 120)
-        }, BorderLayout.CENTER)
+            minimumSize = Dimension(100, 60)
+            maximumSize = Dimension(Int.MAX_VALUE, 220)
+        }
+        topPanel.add(contentScroll, BorderLayout.CENTER)
 
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
+        // Actions section: toolbar + follow-up — clearly separated, never squished
+        val actionsPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = CompoundBorder(
+                EmptyBorder(UiConstants.TOOLBAR_GAP, 0, 0, 0),
+                CompoundBorder(
+                    TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Actions", TitledBorder.LEADING, TitledBorder.TOP),
+                    EmptyBorder(8, 8, 8, 8)
+                )
+            )
+            minimumSize = Dimension(0, 100)
+        }
+        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, UiConstants.FLOW_VGAP))
         toolbar.add(JLabel("Model:"))
         toolbar.add(modelCombo)
+        toolbar.add(JButton("Refresh").apply {
+            toolTipText = "Refresh model list from Ollama"
+            addActionListener {
+                ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, defaultModel)
+            }
+        })
+        toolbar.add(JLabel().apply {
+            if (config.isChainEnabled()) {
+                text = "  🔗 ${config.chainModelA()} → ${config.chainModelB()}"
+                toolTipText = "Chain mode active: model A generates, model B refines"
+            }
+            isVisible = config.isChainEnabled()
+        })
+        config.systemPromptOptions().map { it.first }.forEach { editorSystemPromptCombo.addItem(it) }
+        editorSystemPromptCombo.selectedIndex = 1.coerceIn(0, editorSystemPromptCombo.itemCount - 1) // Default (Explain)
+        toolbar.add(JLabel("System prompt:"))
+        toolbar.add(editorSystemPromptCombo)
+        modelCombo.addActionListener {
+            val sel = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim()
+            if (!sel.isNullOrBlank()) ContextMenuModelState.modelOverride = sel
+        }
         toolbar.add(askButton)
-        toolbar.add(JLabel("Follow-up:"))
-        toolbar.add(followUpField)
-        topPanel.add(toolbar, BorderLayout.SOUTH)
+        actionsPanel.add(toolbar)
+        actionsPanel.add(Box.createVerticalStrut(6))
+        val followUpRow = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 2))
+        followUpRow.add(JLabel("Follow-up:"))
+        followUpField.preferredSize = Dimension(400, 44)
+        followUpField.minimumSize = Dimension(200, 44)
+        followUpField.maximumSize = Dimension(600, 120)
+        followUpRow.add(JScrollPane(followUpField).apply {
+            border = UiConstants.inputFieldBorder()
+        })
+        followUpRow.add(followUpSendButton)
+        actionsPanel.add(followUpRow)
+        topPanel.add(actionsPanel, BorderLayout.SOUTH)
 
-        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, JScrollPane(responseArea))
+        val responsePanel = JPanel(BorderLayout()).apply {
+            border = CompoundBorder(
+                TitledBorder(EtchedBorder(EtchedBorder.LOWERED), "Response", TitledBorder.LEADING, TitledBorder.TOP),
+                EmptyBorder(UiConstants.TOOLBAR_GAP, 6, 6, 6)
+            )
+        }
+        val responseTop = JPanel(BorderLayout()).apply {
+            minimumSize = Dimension(0, 70)
+        }
+        responseTop.add(loadingPanel, BorderLayout.NORTH)
+        // Two rows of buttons so none get cut off when space is tight
+        val responseToolbar = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = EmptyBorder(0, 0, UiConstants.TOOLBAR_GAP, 0)
+        }
+        val row1 = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 2))
+        row1.add(sendToRepeaterButton)
+        row1.add(sendToIntruderButton)
+        row1.add(sendToOrganizerButton)
+        val row2 = JPanel(FlowLayout(FlowLayout.LEFT, UiConstants.FLOW_HGAP, 2))
+        row2.add(copyButton)
+        row2.add(copyReportButton)
+        row2.add(exportConversationButton)
+        row2.add(appendToNotesButton)
+        row2.add(clearButton)
+        responseToolbar.add(row1)
+        responseToolbar.add(Box.createVerticalStrut(4))
+        responseToolbar.add(row2)
+        responseTop.add(responseToolbar, BorderLayout.CENTER)
+        responsePanel.add(responseTop, BorderLayout.NORTH)
+        responsePanel.add(JScrollPane(responseArea), BorderLayout.CENTER)
+
+        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT, topPanel, responsePanel)
         splitPane.resizeWeight = 0.3
         add(splitPane, BorderLayout.CENTER)
 
         askButton.addActionListener { onAskOllama() }
+        followUpSendButton.addActionListener { onAskOllama() }
+        includeRequestCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        includeResponseCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        includeNotesCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        useSelectionCheck.addActionListener { updateContentPreview(); updateAskButtonState() }
+        contentPreview.addCaretListener {
+            val hasSelection = contentPreview.selectedText?.isNotBlank() == true
+            useSelectionCheck.isVisible = hasSelection
+            if (hasSelection) useSelectionCheck.toolTipText = "Use selected text (${contentPreview.selectedText!!.length} chars) as context"
+            else useSelectionCheck.isSelected = false
+            updateContentPreview()
+            updateAskButtonState()
+        }
+        sendToRepeaterButton.addActionListener { sendDetectedRequestsToRepeater() }
+        sendToIntruderButton.addActionListener { sendDetectedRequestsToIntruder() }
+        sendToOrganizerButton.addActionListener { sendDetectedRequestsToOrganizer() }
+        copyButton.addActionListener { onCopy() }
+        copyReportButton.addActionListener { onCopyReport() }
+        exportConversationButton.addActionListener { onExportConversation() }
+        appendToNotesButton.addActionListener { onAppendToNotes() }
+        clearButton.addActionListener { onClear() }
 
-        SwingUtilities.invokeLater { refreshModelCombo() }
+        followUpField.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "askOllama"
+        )
+        followUpField.actionMap.put("askOllama", object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) { onAskOllama() }
+        })
+        followUpField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) { updateAskButtonState() }
+            override fun removeUpdate(e: DocumentEvent) { updateAskButtonState() }
+            override fun changedUpdate(e: DocumentEvent) { updateAskButtonState() }
+        })
+
+        SwingUtilities.invokeLater { refreshModelCombo(); updateAskButtonState() }
+        addHierarchyListener { e ->
+            if ((e.changeFlags.toInt() and java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing) {
+                updateAskButtonState()
+            }
+        }
     }
 
     fun setRequestResponse(requestResponse: HttpRequestResponse?) {
+        val previousRr = currentRequestResponse
         currentRequestResponse = requestResponse
-        conversationHistory.clear()
-        val content = requestResponse?.let { getContent(it) }
-        contentPreview.text = content?.let { truncateForContext(it) } ?: ""
-        responseArea.text = ""
+
+        // Persist current conversation before switching
+        if (previousRr != null && conversationHistory.isNotEmpty()) {
+            OllamaEditorConversationRegistry.putState(
+                previousRr,
+                OllamaEditorConversationRegistry.State(
+                    conversationHistory.toMutableList(),
+                    responseArea.text
+                )
+            )
+        }
+
+        // Restore from registry if we have state for this request
+        val restored = requestResponse?.let { OllamaEditorConversationRegistry.getState(it) }
+        if (restored != null) {
+            conversationHistory.clear()
+            conversationHistory.addAll(restored.conversationHistory)
+            responseArea.text = restored.responseText
+        } else {
+            conversationHistory.clear()
+            responseArea.text = ""
+        }
         followUpField.text = ""
+
+        val hasNotes = requestResponse?.annotations()?.hasNotes() == true
+        includeNotesCheck.isEnabled = hasNotes
+        includeNotesCheck.toolTipText = if (hasNotes) "Include Repeater/tab notes in context" else "No notes on this item"
+        if (!hasNotes) includeNotesCheck.isSelected = false
+        updateContentPreview()
+        updateSendButtons()
+        updateAskButtonState()
+        updateCopyButtonState()
+    }
+
+    private fun updateContentPreview() {
+        val rr = currentRequestResponse ?: run {
+            contentPreview.text = ""
+            return
+        }
+        val parts = mutableListOf<String>()
+        if (includeRequestCheck.isSelected && hasRequest) {
+            getRequest(rr)?.takeIf { it.isNotBlank() }?.let { parts.add("--- Request ---\n$it") }
+        }
+        if (includeResponseCheck.isSelected && hasResponse) {
+            getResponse(rr)?.takeIf { it.isNotBlank() }?.let { parts.add("--- Response ---\n$it") }
+        }
+        if (includeNotesCheck.isSelected && rr.annotations().hasNotes()) {
+            rr.annotations().notes()?.takeIf { it.isNotBlank() }?.let { parts.add("--- Notes ---\n$it") }
+        }
+        contentPreview.text = parts.joinToString("\n\n").let { truncateForContext(it) }.ifBlank { "" }
+    }
+
+    private fun buildContextContent(): String {
+        val rr = currentRequestResponse ?: return ""
+        if (useSelectionCheck.isSelected) {
+            val sel = contentPreview.selectedText?.trim()
+            if (!sel.isNullOrBlank()) return sel
+        }
+        val parts = mutableListOf<String>()
+        if (includeRequestCheck.isSelected && hasRequest) {
+            getRequest(rr)?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+        }
+        if (includeResponseCheck.isSelected && hasResponse) {
+            getResponse(rr)?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+        }
+        if (includeNotesCheck.isSelected && rr.annotations().hasNotes()) {
+            rr.annotations().notes()?.takeIf { it.isNotBlank() }?.let { parts.add("Notes: $it") }
+        }
+        return parts.joinToString("\n\n---\n\n").trim()
+    }
+
+    private fun selectedEditorSystemPrompt(): String {
+        val options = config.systemPromptOptions()
+        val idx = editorSystemPromptCombo.selectedIndex.coerceIn(0, options.size - 1)
+        return options.getOrNull(idx)?.second ?: config.systemPromptExplain
     }
 
     private fun onAskOllama() {
         config.applyTo(ollamaService)
-        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: config.model).trim()
+        val model = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString() ?: defaultModel).trim()
         val numCtx = config.numCtx
-        val systemPrompt = config.systemPromptExplain
+        val systemPrompt = selectedEditorSystemPrompt()
 
         val userMessage = if (conversationHistory.isEmpty()) {
-            val content = currentRequestResponse?.let { getContent(it) }?.trim()
-            if (content.isNullOrBlank()) return
+            val content = buildContextContent().trim()
+            if (content.isBlank()) return
             truncateForContext(content)
         } else {
             val input = followUpField.text.trim()
@@ -111,23 +440,45 @@ class OllamaEditorPanel(
         val messages = buildMessages(systemPrompt, userMessage)
 
         if (conversationHistory.isEmpty()) responseArea.text = ""
+        else responseArea.append("\n---\n")
 
+        val taskId = OllamaTaskRegistry.addTask(userMessage, "Repeater tab")
+        setLoading(true)
+        val startLength = responseArea.text.length
         fun doRequest() {
             if (config.streaming) {
                 ollamaService.chatStreamWithMessagesAsync(model, messages, numCtx) { chunk ->
                     appendToResponse(chunk)
                 }.thenAccept { result ->
                     SwingUtilities.invokeLater {
+                        val newResponse = responseArea.text.substring(startLength)
                         result.fold(
                             onSuccess = {
-                                conversationHistory.add(userMessage to responseArea.text)
+                                conversationHistory.add(userMessage to newResponse)
+                                currentRequestResponse?.let { rr ->
+                                    OllamaAnalyzedItemsRegistry.markAnalyzed(rr)
+                                    OllamaEditorConversationRegistry.putState(
+                                        rr,
+                                        OllamaEditorConversationRegistry.State(
+                                            conversationHistory.toMutableList(),
+                                            responseArea.text
+                                        )
+                                    )
+                                }
+                                updateSendButtons()
+                                updateAskButtonState()
+                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, newResponse)
                             },
-                            onFailure = { err ->
+                                onFailure = { err ->
                                 val msg = OllamaErrorFormatter.format(err, config.baseUrl, config.model)
+                                OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = msg)
                                 setResponseFailed(msg)
+                                updateAskButtonState()
                             }
                         )
                     }
+                }.whenComplete { _, _ ->
+                    SwingUtilities.invokeLater { setLoading(false) }
                 }
             } else {
                 ollamaService.chatWithMessagesAsync(model, messages, numCtx)
@@ -138,35 +489,242 @@ class OllamaEditorPanel(
                                     if (conversationHistory.isNotEmpty()) responseArea.append("\n---\n")
                                     responseArea.append(response)
                                     conversationHistory.add(userMessage to response)
+                                    currentRequestResponse?.let { rr ->
+                                        OllamaAnalyzedItemsRegistry.markAnalyzed(rr)
+                                        OllamaEditorConversationRegistry.putState(
+                                            rr,
+                                            OllamaEditorConversationRegistry.State(
+                                                conversationHistory.toMutableList(),
+                                                responseArea.text
+                                            )
+                                        )
+                                    }
+                                    updateSendButtons()
+                                    updateAskButtonState()
+                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.COMPLETED, response)
                                 },
                                 onFailure = { err ->
                                     val msg = OllamaErrorFormatter.format(err, config.baseUrl, config.model)
+                                    OllamaTaskRegistry.updateTask(taskId, OllamaTaskRegistry.Task.Status.FAILED, error = msg)
+                                    updateAskButtonState()
                                     showErrorDialog("Ollama Error", msg) { doRequest() }
                                 }
                             )
                         }
+                    }.whenComplete { _, _ ->
+                        SwingUtilities.invokeLater { setLoading(false) }
                     }
             }
         }
         doRequest()
     }
 
+    private fun updateSendButtons() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        val enabled = requests.isNotEmpty()
+        sendToRepeaterButton.isEnabled = enabled
+        sendToIntruderButton.isEnabled = enabled
+        sendToOrganizerButton.isEnabled = enabled
+        updateCopyButtonState()
+    }
+
+    private fun updateAskButtonState() {
+        val hasContext = buildContextContent().trim().isNotBlank()
+        val hasFollowUp = followUpField.text.trim().isNotBlank()
+        // Ask: enabled when there is context to send (request/response first time) or when in conversation and user typed follow-up
+        askButton.isEnabled = hasContext || (conversationHistory.isNotEmpty() && hasFollowUp)
+        followUpSendButton.isEnabled = conversationHistory.isNotEmpty() && hasFollowUp
+    }
+
+    private fun updateCopyButtonState() {
+        val hasContent = responseArea.text.isNotBlank()
+        copyButton.isEnabled = hasContent
+        copyReportButton.isEnabled = hasContent
+        exportConversationButton.isEnabled = conversationHistory.isNotEmpty()
+        appendToNotesButton.isEnabled = hasContent && currentRequestResponse != null && notesEditable
+        appendToNotesButton.toolTipText = when {
+            !notesEditable -> "Notes are read-only in Proxy. Send to Repeater first to append."
+            else -> "Append AI response to Repeater tab notes"
+        }
+    }
+
+    private fun onClear() {
+        conversationHistory.clear()
+        responseArea.text = ""
+        followUpField.text = ""
+        updateSendButtons()
+        updateAskButtonState()
+        updateCopyButtonState()
+    }
+
+    private fun onCopy() {
+        val text = responseArea.text
+        if (text.isNotBlank()) {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+            showCopiedFeedback(copyButton)
+        }
+    }
+
+    private fun onCopyReport() {
+        val text = responseArea.text
+        if (text.isNotBlank()) {
+            val snippet = ReportSnippetFormatter.format(text, config.reportSnippetTemplate)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(snippet), null)
+            showCopiedFeedback(copyReportButton)
+        }
+    }
+
+    private fun onExportConversation() {
+        if (conversationHistory.isEmpty()) return
+        val chooser = javax.swing.JFileChooser().apply {
+            dialogTitle = "Export conversation"
+            selectedFile = java.io.File("ollama-repeater-export.md")
+        }
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return
+        val file = chooser.selectedFile ?: return
+        val markdown = buildString {
+            append("# Ollama Repeater Conversation\n\n")
+            for ((user, assistant) in conversationHistory) {
+                append("## User\n\n")
+                append(user.trim())
+                append("\n\n## Assistant\n\n")
+                append(assistant.trim())
+                append("\n\n---\n\n")
+            }
+        }
+        try {
+            file.writeText(markdown)
+            showCopiedFeedback(exportConversationButton)
+            exportConversationButton.text = "Exported!"
+            javax.swing.Timer(1500) { evt ->
+                exportConversationButton.text = "Export conversation"
+                (evt.source as? javax.swing.Timer)?.stop()
+            }.start()
+        } catch (e: Exception) {
+            showErrorDialog("Export failed", "Could not save file: ${e.message}") { }
+        }
+    }
+
+    private fun showCopiedFeedback(button: JButton) {
+        val orig = button.text
+        button.text = "Copied!"
+        javax.swing.Timer(1500) { evt ->
+            button.text = orig
+            (evt.source as? javax.swing.Timer)?.stop()
+        }.start()
+    }
+
+    private fun onAppendToNotes() {
+        val text = responseArea.text.trim()
+        val rr = currentRequestResponse ?: return
+        if (text.isBlank()) return
+        if (!notesEditable) {
+            showErrorDialog(
+                "Notes read-only",
+                "Notes cannot be edited in Proxy. Send this request to Repeater first, then use Append to notes there."
+            ) { }
+            return
+        }
+        try {
+            val annotations = rr.annotations()
+            val existing = annotations.notes()?.takeIf { it.isNotBlank() } ?: ""
+            val newNotes = if (existing.isBlank()) text else "$existing\n\n--- AI Analysis ---\n$text"
+            annotations.setNotes(newNotes)
+            showCopiedFeedback(appendToNotesButton)
+            appendToNotesButton.text = "Appended!"
+            javax.swing.Timer(1500) { evt ->
+                appendToNotesButton.text = "Append to notes"
+                (evt.source as? javax.swing.Timer)?.stop()
+            }.start()
+        } catch (e: Exception) {
+            showErrorDialog(
+                "Append failed",
+                "Could not append to notes: ${e.message ?: "Notes may be read-only in this context."}"
+            ) { }
+        }
+    }
+
+    private fun sendDetectedRequestsToRepeater() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        val service = currentRequestResponse?.request()?.httpService()
+        var success = 0
+        var failure = 0
+        for ((i, raw) in requests.withIndex()) {
+            try {
+                var req = HttpRequest.httpRequest(raw)
+                // Use current request's target (host, port, protocol) when available
+                if (service != null) req = req.withService(service)
+                montoyaApi.repeater().sendToRepeater(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
+                success++
+            } catch (_: Exception) { failure++ }
+        }
+        reportSendResult("Repeater", success, failure)
+    }
+
+    private fun sendDetectedRequestsToIntruder() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        val service = currentRequestResponse?.request()?.httpService()
+        var success = 0
+        var failure = 0
+        for ((i, raw) in requests.withIndex()) {
+            try {
+                var req = HttpRequest.httpRequest(raw)
+                if (service != null) req = req.withService(service)
+                montoyaApi.intruder().sendToIntruder(req, if (requests.size > 1) "Ollama #${i + 1}" else null)
+                success++
+            } catch (_: Exception) { failure++ }
+        }
+        reportSendResult("Intruder", success, failure)
+    }
+
+    private fun sendDetectedRequestsToOrganizer() {
+        val requests = HttpRequestExtractor.extractRequests(responseArea.text)
+        var success = 0
+        var failure = 0
+        for (raw in requests) {
+            try {
+                val req = HttpRequest.httpRequest(raw)
+                val rr = montoyaApi.http().sendRequest(req)
+                montoyaApi.organizer().sendToOrganizer(rr)
+                success++
+            } catch (_: Exception) { failure++ }
+        }
+        reportSendResult("Organizer", success, failure)
+    }
+
+    private fun reportSendResult(target: String, success: Int, failure: Int) {
+        val total = success + failure
+        if (total == 0 || failure == 0) return
+        val msg = if (success == 0) {
+            "Failed to send any requests to $target. The extracted HTTP requests may be malformed."
+        } else {
+            "$success request(s) sent to $target. $failure request(s) failed."
+        }
+        if (success == 0) {
+            javax.swing.JOptionPane.showMessageDialog(
+                this,
+                msg,
+                "Send to $target",
+                javax.swing.JOptionPane.WARNING_MESSAGE
+            )
+        } else {
+            montoyaApi.logging().logToOutput(msg)
+        }
+    }
+
     private fun buildMessages(systemPrompt: String, newUserMessage: String): List<ollama.ChatMessage> {
-        val messages = mutableListOf<ollama.ChatMessage>()
-        if (systemPrompt.isNotBlank()) {
-            messages.add(ollama.ChatMessage(role = "system", content = systemPrompt))
-        }
-        for ((user, assistant) in conversationHistory) {
-            messages.add(ollama.ChatMessage(role = "user", content = user))
-            messages.add(ollama.ChatMessage(role = "assistant", content = assistant))
-        }
-        messages.add(ollama.ChatMessage(role = "user", content = newUserMessage))
-        return messages
+        return ConversationHelper.buildMessages(
+            systemPrompt = systemPrompt,
+            conversationHistory = conversationHistory,
+            newUserMessage = newUserMessage,
+            followUpPrefix = "Regarding the HTTP request/response we just analyzed: "
+        )
     }
 
     private fun appendToResponse(text: String) {
         SwingUtilities.invokeLater {
             responseArea.append(text)
+            updateCopyButtonState()
             val scrollPane = responseArea.parent as? JScrollPane
             scrollPane?.verticalScrollBar?.value = scrollPane?.verticalScrollBar?.maximum ?: 0
         }
@@ -178,24 +736,15 @@ class OllamaEditorPanel(
         }
     }
 
-    private fun refreshModelCombo() {
-        ollamaService.execute {
-            config.applyTo(ollamaService)
-            val models = ollamaService.listModels()
-            if (models.isSuccess) {
-                SwingUtilities.invokeLater {
-                    val current = (modelCombo.editor?.item?.toString() ?: modelCombo.selectedItem?.toString())?.trim() ?: config.model
-                    val list = models.getOrNull() ?: emptyList()
-                    val items = if (list.isEmpty()) listOf(current) else {
-                        val mutable = list.toMutableList()
-                        if (!mutable.contains(current)) mutable.add(0, current)
-                        mutable
-                    }
-                    modelCombo.model = DefaultComboBoxModel(items.toTypedArray())
-                    modelCombo.selectedItem = current
-                }
-            }
+    private fun setLoading(loading: Boolean) {
+        SwingUtilities.invokeLater {
+            loadingPanel.isVisible = loading
+            askButton.isEnabled = !loading
         }
+    }
+
+    private fun refreshModelCombo() {
+        ModelComboHelper.refreshCombo(modelCombo, ollamaService, config, defaultModel)
     }
 }
 
@@ -203,16 +752,21 @@ class OllamaEditorPanel(
  * Ollama tab for HTTP response editor (Repeater response pane).
  */
 class OllamaHttpResponseEditor(
-    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
+    creationContext: EditorCreationContext,
+    private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit
 ) : ExtensionProvidedHttpResponseEditor {
 
     private val panel = OllamaEditorPanel(
-        config, ollamaService,
-        getContent = { rr -> rr.response()?.toString() },
-        showErrorDialog
+        montoyaApi, config, ollamaService,
+        hasRequest = true,
+        hasResponse = true,
+        getRequest = { rr -> rr.request().toString() },
+        getResponse = { rr -> rr.response()?.toString() ?: "" },
+        showErrorDialog,
+        toolType = creationContext.toolSource().toolType()
     )
     private var currentRequestResponse: HttpRequestResponse? = null
 
@@ -239,16 +793,21 @@ class OllamaHttpResponseEditor(
  * Ollama tab for HTTP request editor (Repeater request pane).
  */
 class OllamaHttpRequestEditor(
-    @Suppress("UNUSED_PARAMETER") creationContext: EditorCreationContext,
+    creationContext: EditorCreationContext,
+    private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit
 ) : ExtensionProvidedHttpRequestEditor {
 
     private val panel = OllamaEditorPanel(
-        config, ollamaService,
-        getContent = { rr -> rr.request().toString() },
-        showErrorDialog
+        montoyaApi, config, ollamaService,
+        hasRequest = true,
+        hasResponse = true,
+        getRequest = { rr -> rr.request().toString() },
+        getResponse = { rr -> rr.response()?.toString() ?: "" },
+        showErrorDialog,
+        toolType = creationContext.toolSource().toolType()
     )
     private var currentRequestResponse: HttpRequestResponse? = null
 
@@ -274,22 +833,24 @@ class OllamaHttpRequestEditor(
  * Provider for Ollama tab in HTTP response editors.
  */
 class OllamaHttpResponseEditorProvider(
+    private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit
 ) : burp.api.montoya.ui.editor.extension.HttpResponseEditorProvider {
     override fun provideHttpResponseEditor(creationContext: EditorCreationContext) =
-        OllamaHttpResponseEditor(creationContext, config, ollamaService, showErrorDialog)
+        OllamaHttpResponseEditor(creationContext, montoyaApi, config, ollamaService, showErrorDialog)
 }
 
 /**
  * Provider for Ollama tab in HTTP request editors.
  */
 class OllamaHttpRequestEditorProvider(
+    private val montoyaApi: MontoyaApi,
     private val config: OllamaConfig,
     private val ollamaService: OllamaService,
     private val showErrorDialog: (String, String, () -> Unit) -> Unit
 ) : burp.api.montoya.ui.editor.extension.HttpRequestEditorProvider {
     override fun provideHttpRequestEditor(creationContext: EditorCreationContext) =
-        OllamaHttpRequestEditor(creationContext, config, ollamaService, showErrorDialog)
+        OllamaHttpRequestEditor(creationContext, montoyaApi, config, ollamaService, showErrorDialog)
 }
